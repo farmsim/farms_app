@@ -1,47 +1,37 @@
 [build-system]
-requires = ["setuptools >= 61.0"]
+requires = ["setuptools>=68.0", "wheel", "Cython>=3.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "farms_app"
-version = "0.0.1.dev0"
-license = {file = "LICENSE.txt"}
+version = "0.1.18"
 description = "GUI Application for neuromechanical simulations using FARMS"
-maintainers = [
-    {name="Farmers", email="biorob-farms@groupes.epfl.ch"},
-]
-requires-python = ">=3.10"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">= 3.11"
 dependencies = [
-    "numpy <= 1.26.4",
     "imgui_bundle",
+    "pyopengl",
+    "glfw",
+    "numpy",
     "tqdm",
     "pyyaml",
     "rich",
     "h5py",
-    "farms_core @ git+https://github.com/farmsim/farms_core.git",
-] # keep in sync with `min_numpy_version` in meson.build
+    "stevedore",
+    "farms_core", # Needed for logging
+]
 
-readme = "README.md"
 classifiers = [
-    "Development Status :: 3 - Beta",
-    "Intended Audience :: Science/Research",
-    "Intended Audience :: Developers",
-    "License :: OSI Approved :: BSD License",
-    "Programming Language :: C",
-    "Programming Language :: Python",
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
-    "Topic :: Software Development :: Libraries",
-    "Topic :: Scientific/Engineering",
-    "Topic :: Scientific visualization",
-    "Operating System :: Microsoft :: Windows",
-    "Operating System :: POSIX :: Linux",
-    "Operating System :: POSIX",
-    "Operating System :: Unix",
-    "Operating System :: MacOS",
+  "Development Status :: 4 - Beta",
+  # Indicate who your project is intended for
+  "Intended Audience :: Science/Research",
+  "Topic :: Scientific/Engineering",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Scientific/Engineering :: Artificial Life",
+  # Specify the Python versions you support here.
+  "Programming Language :: Python :: 3",
 ]
 
 [project.urls]
@@ -49,7 +39,35 @@ Homepage = "https://farmsim.dev"
 Documentation = "https://farmsim.dev"
 Repository = "https://github.com/farmsim/farms_app.git"
 Issues = "https://github.com/farmsim/farms_app/issues"
-Changelog = "https://github.com/me/spam/blob/master/CHANGELOG.md"
+Changelog = "https://github.com/farmsim/farms_app/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
-full = []
+farms = [
+    "farms_sim",
+    "farms_mujoco",
+    "farms_network",
+    "farms_muscle",
+]
+
+[project.scripts]
+farms-app = "farms_app.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]  # Change this - look in current directory
+include = ["farms_app*"]  # Include farms_app and subpackages
+
+[tool.setuptools.package-data]
+farms_app = [
+   "assets/fonts/*.ttf",
+   "assets/**/*"
+]
+
+[project.entry-points."farms.app.extension"]
+status_bar = "farms_app.extensions.ui.status_bar:StatusBarExtension"
+debug = "farms_app.extensions.ui.logger:DebugExtension"
+farmsim = "farms_app.extensions.farmsim.extension:FARMSIMExtension"
+
+# mujoco = "farms_app.extensions.custom.mujoco_impl:MuJoCoExtension"
+# experimental = "farms_app.extensions.custom.experimental:ExperimentalExtension"
+# network = "farms_app.extensions.custom.network:NetworkExtension"
+# optimization = "farms_app.extensions.custom.optimization:OptimizationExtension"

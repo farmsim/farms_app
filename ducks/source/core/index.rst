@@ -1,0 +1,7 @@
+Core
+====
+
+.. toctree::
+   :hidden:
+
+   application
