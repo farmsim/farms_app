@@ -1,65 +1,29 @@
-""" MuJoCo """
-from farms_app.utils.mujoco import setup_scene
+""" Standalone MuJoCo viewer extension for testing XML files """
 
-import ctypes
+from __future__ import annotations
 
 import mujoco
 import numpy as np
-import OpenGL.GL as GL  # type: ignore
-from farms_app.backends.renderer.gl_framebuffer import MSAAFramebuffer
-from farms_core import pylog
-from imgui_bundle import imgui
-
 from farms_app.core.extension import Extension
-from imgui_bundle import portable_file_dialogs as pfd
 from farms_app.core.window import Window
-
-
-MJ_IMGUI_KEYMAP = {
-    # special keys
-    "/": imgui.Key.slash,
-    "\\": imgui.Key.backslash,
-    ",": imgui.Key.comma,
-    ".": imgui.Key.period,
-    ";": imgui.Key.semicolon,
-    "'": imgui.Key.apostrophe,
-    "[": imgui.Key.left_bracket,
-    "]": imgui.Key.right_bracket,
-    "-": imgui.Key.minus,
-    "=": imgui.Key.equal,
-    "`": imgui.Key.grave_accent,
-    # letters A–Z
-    **{chr(c): getattr(imgui.Key, chr(c).lower()) for c in range(ord("A"), ord("Z")+1)},
-    **{str(i): getattr(imgui.Key, f"_{i}") for i in range(6)},
-}
-
-
-_mjGEOMSTRING = (
-    (
-        "Geom1", "1", "0",
-        "Geom2", "1", "1",
-        "Geom3", "1", "2",
-        "Geom4", "0", "3",
-        "Geom5", "0", "4",
-        "Geom6", "0", "5",
-    ),
+from farms_app.utils.mujoco import (
+    setup_scene, mouse_interactions, keyboard_interactions,
 )
+from imgui_bundle import imgui
+from imgui_bundle import portable_file_dialogs as pfd
 
 
 class MuJoCoWindow(Window):
-    """ MuJoCo Window """
+    """Standalone MuJoCo viewer window."""
 
-    def __init__(self, extension, window_size = (1280, 720)):
-        name: str = "MuJoCo"
-        super().__init__(name, extension)
+    def __init__(self, extension, width: int = 1280, height: int = 720):
+        super().__init__("MuJoCo", extension)
         self._io = imgui.get_io()
+        self.width = width
+        self.height = height
         self.model = None
         self.data = None
-        self._io = imgui.get_io()
-        self.width = window_size[0]
-        self.height = window_size[1]
 
-        self.fb = None
         self.mj_camera = None
         self.mj_option = None
         self.mj_perturb = None
@@ -67,27 +31,51 @@ class MuJoCoWindow(Window):
         self.mj_context = None
         self.mj_viewport = None
 
+        self._resolve_fbo = 0
+        self._resolve_tex = 0
+        self._needs_resolve_fbo = False
+
         self._viewer_pos = None
         self._viewer_size = None
         self.is_scene_hovered = False
 
-    def on_initialize(self):
-        """ Initialize """
-        pass
+    def _create_resolve_fbo(self, width: int, height: int):
+        """Create a simple FBO with a texture attachment for ImGui display."""
+        import OpenGL
+        import OpenGL.GL as GL
+        _prev = OpenGL.ERROR_CHECKING
+        OpenGL.ERROR_CHECKING = False
+        try:
+            if self._resolve_fbo:
+                GL.glDeleteFramebuffers(1, [self._resolve_fbo])
+                GL.glDeleteTextures([self._resolve_tex])
 
-    def on_render(self):
-        """ Render main extension dockspace """
-        if self.data is not None and self.model is not None:
-            self.run_simulation()
-            imgui.text(f"select: {self.mj_perturb.select}  active: {self.mj_perturb.active}")
-            imgui.text(f"xfrc[select]: {self.data.xfrc_applied[max(self.mj_perturb.select, 0)]}")
-        else:
-            if imgui.button("Load mjcf"):
-                self.result = pfd.open_file("Load MJCF", default_path="", filters=("*.xml",),).result()
-                if self.result:
-                    self.model = mujoco.MjModel.from_xml_path(self.result[0])
+            self._resolve_tex = GL.glGenTextures(1)
+            GL.glBindTexture(GL.GL_TEXTURE_2D, self._resolve_tex)
+            GL.glTexImage2D(
+                GL.GL_TEXTURE_2D, 0, GL.GL_RGBA8,
+                width, height, 0,
+                GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, None,
+            )
+            GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MIN_FILTER, GL.GL_LINEAR)
+            GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MAG_FILTER, GL.GL_LINEAR)
+
+            self._resolve_fbo = GL.glGenFramebuffers(1)
+            GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, self._resolve_fbo)
+            GL.glFramebufferTexture2D(
+                GL.GL_FRAMEBUFFER, GL.GL_COLOR_ATTACHMENT0,
+                GL.GL_TEXTURE_2D, self._resolve_tex, 0,
+            )
+            GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, 0)
+            GL.glBindTexture(GL.GL_TEXTURE_2D, 0)
+        finally:
+            OpenGL.ERROR_CHECKING = _prev
+        self._needs_resolve_fbo = False
+
+    def load_model(self, path: str):
+        """Load a MuJoCo model from an XML file."""
+        self.model = mujoco.MjModel.from_xml_path(path)
                     self.data = mujoco.MjData(self.model)
-                    # Setup mujoco scene
                     render_flags = {
                         mujoco.mjtRndFlag.mjRND_SKYBOX: True,
                         mujoco.mjtRndFlag.mjRND_REFLECTION: True,
@@ -97,89 +85,176 @@ class MuJoCoWindow(Window):
                      self.mj_context, self.mj_scene, self.mj_viewport) = setup_scene(
                          self.model, self.width, self.height, render_flags=render_flags,
                     )
-                    self.fb = MSAAFramebuffer(self.width, self.height, samples=4)
+        self._needs_resolve_fbo = True
 
-    def run_simulation(self):
-        """ Run Simulation """
-        self.start_time = self.data.time
-        while (self.data.time - self.start_time < 1.0/60.0):
-            self.apply_perturbation()
-            mujoco.mj_step(self.model, self.data)
+    def render_mujoco(self):
+        """Render MuJoCo scene to offscreen FBO, blit to texture. Called before ImGui frame."""
+        import OpenGL.GL as GL
+        if self.model is None:
+            return
+        if self._needs_resolve_fbo:
+            mujoco.mjr_resizeOffscreen(self.width, self.height, self.mj_context)
+            self._create_resolve_fbo(self.mj_context.offWidth, self.mj_context.offHeight)
 
-        self._viewer_pos = imgui.get_cursor_screen_pos()
+        # Ensure MuJoCo renders to its offscreen FBO
+        mujoco.mjr_setBuffer(mujoco.mjtFramebuffer.mjFB_OFFSCREEN, self.mj_context)
 
-        self.fb.bind()
         mujoco.mjv_updateScene(
             self.model, self.data,
             self.mj_option, self.mj_perturb, self.mj_camera,
             mujoco.mjtCatBit.mjCAT_ALL, self.mj_scene,
         )
         mujoco.mjr_render(self.mj_viewport, self.mj_scene, self.mj_context)
-        self.fb.unbind()
-        self.fb.resolve()
 
-        # Fit image to available space preserving aspect ratio
+        # Flush stale GL errors from MuJoCo's legacy rendering (C call, bypasses PyOpenGL)
+        while mujoco.mjr_getError():
+            pass
+
+        # Blit from MuJoCo's offscreen renderbuffer to our texture FBO
+        off_w = self.mj_context.offWidth
+        off_h = self.mj_context.offHeight
+        GL.glBindFramebuffer(GL.GL_READ_FRAMEBUFFER, int(self.mj_context.offFBO))
+        GL.glBindFramebuffer(GL.GL_DRAW_FRAMEBUFFER, int(self._resolve_fbo))
+        GL.glBlitFramebuffer(
+            0, 0, off_w, off_h,
+            0, 0, off_w, off_h,
+            GL.GL_COLOR_BUFFER_BIT, GL.GL_NEAREST,
+        )
+        # Force alpha=1 (MuJoCo clears to alpha=0, ImGui blends as transparent)
+        GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, int(self._resolve_fbo))
+        GL.glColorMask(GL.GL_FALSE, GL.GL_FALSE, GL.GL_FALSE, GL.GL_TRUE)
+        GL.glClearColor(0.0, 0.0, 0.0, 1.0)
+        GL.glClear(GL.GL_COLOR_BUFFER_BIT)
+        GL.glColorMask(GL.GL_TRUE, GL.GL_TRUE, GL.GL_TRUE, GL.GL_TRUE)
+        GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, 0)
+
+    def on_render(self):
+        if self.model is None:
+            if imgui.button("Load MJCF"):
+                result = pfd.open_file(
+                    "Load MJCF", default_path="", filters=("*.xml",),
+                ).result()
+                if result:
+                    self.load_model(result[0])
+            return
+
+        # Step simulation
+        start_time = self.data.time
+        while self.data.time - start_time < 1.0 / 60.0:
+            self._apply_perturbation()
+            mujoco.mj_step(self.model, self.data)
+
+        self._render_scene()
+
+        imgui.text(f"select: {self.mj_perturb.select}  active: {self.mj_perturb.active}")
+        imgui.text(f"xfrc[select]: {self.data.xfrc_applied[max(self.mj_perturb.select, 0)]}")
+
+    def _render_scene(self):
+        """Display pre-rendered MuJoCo texture as ImGui image."""
+        self._viewer_pos = imgui.get_cursor_screen_pos()
+
         avail_w, avail_h = imgui.get_content_region_avail()
         if avail_w <= 0 or avail_h <= 0:
             return
 
-        aspect = self.width / self.height
-        if avail_w / avail_h > aspect:
-            draw_h = avail_h
-            draw_w = aspect * draw_h
-        else:
-            draw_w = avail_w
-            draw_h = draw_w / aspect
+        new_w, new_h = int(avail_w), int(avail_h)
+        if new_w != self.width or new_h != self.height:
+            self._resize(new_w, new_h)
 
         imgui.image(
-            imgui.ImTextureRef(self.fb.texture_id),
-            imgui.ImVec2(draw_w, draw_h),
-            uv0=imgui.ImVec2(1, 1),
-            uv1=imgui.ImVec2(0, 0),
+            imgui.ImTextureRef(self._resolve_tex),
+            imgui.ImVec2(avail_w, avail_h),
+            uv0=imgui.ImVec2(0, 1),
+            uv1=imgui.ImVec2(1, 0),
         )
         self._viewer_size = imgui.get_item_rect_size()
         self.is_scene_hovered = imgui.is_item_hovered()
 
+    def _resize(self, width: int, height: int):
+        """Mark resize needed (actual resize happens in pre-frame)."""
+        self.width = width
+        self.height = height
+        self.mj_viewport.width = width
+        self.mj_viewport.height = height
+        self._needs_resolve_fbo = True
+
+    # ── Input handling ─────────────────────────────────────────────────
+
     def handle_input(self):
+        """Process mouse/keyboard input for camera and perturbation."""
         if not self.is_scene_hovered:
+            if self.mj_perturb.active != 0:
+                self.mj_perturb.active = 0
             return
 
-        # Keyboard
-        self.keyboard_interactions()
-        # Mouse
-        self.mouse_interactions()
+        import sys
+        _IS_MACOS = sys.platform == 'darwin'
 
-    def __mj_keys(self, mjSTRING: tuple[str, str, str], mj_flags):
-        for j, _opt in enumerate(mjSTRING):
-            key_str = _opt[2]
-            if not key_str:
-                continue        # Skip if no key assigned
-            key_enum = MJ_IMGUI_KEYMAP.get(key_str)
-            if key_enum is None:
-                continue
-            if imgui.is_key_pressed(key_enum):
-                mj_flags[j] = not mj_flags[j]
+        if _IS_MACOS:
+            ctrl_held = imgui.is_key_down(imgui.Key.left_super) or imgui.is_key_down(imgui.Key.right_super)
+            perturb_mouse = imgui.Key.mouse_right
+        else:
+            ctrl_held = imgui.is_key_down(imgui.Key.left_ctrl) or imgui.is_key_down(imgui.Key.right_ctrl)
+            perturb_mouse = imgui.Key.mouse_left
+        shift_held = imgui.is_key_down(imgui.Key.left_shift) or imgui.is_key_down(imgui.Key.right_shift)
 
-    def keyboard_interactions(self):
-        """ keyboard interactions """
-        self.__mj_keys(mujoco.mjRNDSTRING, self.mj_scene.flags)
-        self.__mj_keys(mujoco.mjVISSTRING, self.mj_option.flags)
-        self.__mj_keys(_mjGEOMSTRING, self.mj_option.geomgroup)
+        # Double-click: select/deselect body
+        if imgui.is_mouse_double_clicked(imgui.MouseButton_.left):
+            self._pick_body()
 
-    def _screen_to_viewport(self, mouse_pos):
+        # Ctrl + drag: update perturbation reference
+        if ctrl_held and self.mj_perturb.select > 0:
+            if imgui.is_key_down(perturb_mouse):
+                newperturb = (
+                    mujoco.mjtPertBit.mjPERT_ROTATE if shift_held
+                    else mujoco.mjtPertBit.mjPERT_TRANSLATE
+                )
+                if not self.mj_perturb.active:
+                    mujoco.mjv_initPerturb(
+                        self.model, self.data, self.mj_scene, self.mj_perturb
+                    )
+                    self.mj_perturb.active = newperturb
+
+                mouse_delta = self._io.mouse_delta
+                if shift_held:
+                    self._perturb_rotate(mouse_delta)
+                else:
+                    self._perturb_translate(mouse_delta)
+            else:
+                self.mj_perturb.active = 0
+
+        elif not ctrl_held:
+            self.mj_perturb.active = 0
+            mouse_interactions(
+                self.model, self.mj_scene, self.mj_camera,
+                self.width, self.height,
+            )
+
+        keyboard_interactions(self.mj_scene, self.mj_option)
+
+    def _apply_perturbation(self):
+        """Apply perturbation forces. Call before mj_step."""
+        self.data.xfrc_applied[:] = 0
+        mujoco.mjv_applyPerturbPose(self.model, self.data, self.mj_perturb, 0)
+        mujoco.mjv_applyPerturbForce(self.model, self.data, self.mj_perturb)
+
+    # ── Body selection & perturbation ────────────────────────────────
+
+    def _screen_to_mujoco(self, mouse_pos):
         """Convert ImGui screen coords to MuJoCo framebuffer coords.
 
-        Accounts for UV flip (uv0=1,1  uv1=0,0) in imgui.image().
+        UV is uv0=(0,1), uv1=(1,0): vertical flip only (OpenGL bottom-origin).
+        X maps directly; Y is inverted.
         """
         rel_x = mouse_pos.x - self._viewer_pos.x
         rel_y = mouse_pos.y - self._viewer_pos.y
-        gl_x = int((1.0 - rel_x / self._viewer_size.x) * self.width)
+        gl_x = int(rel_x / self._viewer_size.x * self.width)
         gl_y = int((1.0 - rel_y / self._viewer_size.y) * self.height)
         return gl_x, gl_y
 
     def _pick_body(self):
-        """Double-click: select body under cursor."""
-        gl_x, gl_y = self._screen_to_viewport(self._io.mouse_pos)
+        """Raycast into scene and select/deselect body under cursor."""
+        gl_x, gl_y = self._screen_to_mujoco(self._io.mouse_pos)
         aspect = self.width / self.height
 
         geom_id = np.array([-1], dtype=np.int32)
@@ -196,73 +271,18 @@ class MuJoCoWindow(Window):
         if body_id > 0:
             self.mj_perturb.select = body_id
             self.mj_perturb.refselpos = sel_pos
-            # Compute click point in body-local frame (mirrors simulate.cc)
             body_pos = self.data.xpos[body_id]
             body_mat = self.data.xmat[body_id].reshape(3, 3)
-            self.mj_perturb.localpos = body_mat.T @ (sel_pos - body_pos)
+            com_world = self.data.xipos[body_id]
+            self.mj_perturb.localpos = body_mat.T @ (com_world - body_pos)
         else:
             self.mj_perturb.select = 0
             self.mj_perturb.active = 0
 
-    def apply_perturbation(self):
-        """Apply perturbation forces. Call before mj_step.
-
-        Mirrors simulate.cc Sync():
-        1. Zero xfrc_applied
-        2. applyPerturbPose (mocap only when running)
-        3. applyPerturbForce
-        """
-        self.data.xfrc_applied[:] = 0
-        mujoco.mjv_applyPerturbPose(self.model, self.data, self.mj_perturb, 0)
-        mujoco.mjv_applyPerturbForce(self.model, self.data, self.mj_perturb)
-
-    def mouse_interactions(self):
-        """ Mouse interactions """
-        mouse_delta = self._io.mouse_delta
-        mouse_wheel = self._io.mouse_wheel
-        import sys
-        _IS_MACOS = sys.platform == 'darwin'
-
-        # On macOS: physical Ctrl → Key.left_super/right_super
-        # AND macOS converts Ctrl+left-click → right-click at OS level
-        if _IS_MACOS:
-            ctrl_held = imgui.is_key_down(imgui.Key.left_super) or imgui.is_key_down(imgui.Key.right_super)
-            perturb_mouse = imgui.Key.mouse_right   # Ctrl+click arrives as right-click
-        else:
-            ctrl_held = imgui.is_key_down(imgui.Key.left_ctrl) or imgui.is_key_down(imgui.Key.right_ctrl)
-            perturb_mouse = imgui.Key.mouse_left
-        shift_held = imgui.is_key_down(imgui.Key.left_shift) or imgui.is_key_down(imgui.Key.right_shift)
-
-        # Double-click: select/deselect body
-        if imgui.is_mouse_double_clicked(imgui.MouseButton_.left):
-            self._pick_body()
-
-        # Ctrl + drag: perturbation (macOS: Ctrl+click = right-click)
-        if ctrl_held and self.mj_perturb.select > 0:
-            if imgui.is_key_down(perturb_mouse):
-                newperturb = (
-                    mujoco.mjtPertBit.mjPERT_ROTATE if shift_held
-                    else mujoco.mjtPertBit.mjPERT_TRANSLATE
-                )
-                if not self.mj_perturb.active:
-                    mujoco.mjv_initPerturb(
-                        self.model, self.data, self.mj_scene, self.mj_perturb
-                    )
-                    self.mj_perturb.active = newperturb
-
-                # Negate deltas to account for UV flip (uv0=1,1 uv1=0,0)
-                dx = -mouse_delta.x / self.width
+    def _perturb_translate(self, mouse_delta):
+        """Ctrl + drag: update perturbation reference position."""
+        dx = mouse_delta.x / self.width
                 dy = mouse_delta.y / self.height
-                if shift_held:
-                    mujoco.mjv_movePerturb(
-                        self.model, self.data, mujoco.mjtMouse.mjMOUSE_ROTATE_H,
-                        dx, 0.0, self.mj_scene, self.mj_perturb,
-                    )
-                    mujoco.mjv_movePerturb(
-                        self.model, self.data, mujoco.mjtMouse.mjMOUSE_ROTATE_V,
-                        0.0, dy, self.mj_scene, self.mj_perturb,
-                    )
-                else:
                     mujoco.mjv_movePerturb(
                         self.model, self.data, mujoco.mjtMouse.mjMOUSE_MOVE_H,
                         dx, 0.0, self.mj_scene, self.mj_perturb,
@@ -271,58 +291,33 @@ class MuJoCoWindow(Window):
                         self.model, self.data, mujoco.mjtMouse.mjMOUSE_MOVE_V,
                         0.0, dy, self.mj_scene, self.mj_perturb,
                     )
-            else:
-                self.mj_perturb.active = 0
 
-        elif not ctrl_held:
-            self.mj_perturb.active = 0
-            # Camera: left-drag = orbit, right-drag = pan, wheel = zoom
-            if imgui.is_key_down(imgui.Key.mouse_left):
-                mujoco.mjv_moveCamera(
-                    self.model, mujoco.mjtMouse.mjMOUSE_ROTATE_H,
-                    -mouse_delta.x / self.width, 0.0,
-                    self.mj_scene, self.mj_camera,
+    def _perturb_rotate(self, mouse_delta):
+        """Ctrl + Shift + drag: update perturbation reference orientation."""
+        dx = mouse_delta.x / self.width
+        dy = mouse_delta.y / self.height
+        mujoco.mjv_movePerturb(
+            self.model, self.data, mujoco.mjtMouse.mjMOUSE_ROTATE_H,
+            dx, 0.0, self.mj_scene, self.mj_perturb,
                 )
-                mujoco.mjv_moveCamera(
-                    self.model, mujoco.mjtMouse.mjMOUSE_ROTATE_V,
-                    0.0, mouse_delta.y / self.height,
-                    self.mj_scene, self.mj_camera,
-                )
-            elif imgui.is_key_down(imgui.Key.mouse_right):
-                mujoco.mjv_moveCamera(
-                    self.model, mujoco.mjtMouse.mjMOUSE_MOVE_H,
-                    -mouse_delta.x / self.width, 0.0,
-                    self.mj_scene, self.mj_camera,
-                )
-                mujoco.mjv_moveCamera(
-                    self.model, mujoco.mjtMouse.mjMOUSE_MOVE_V,
-                    0.0, mouse_delta.y / self.height,
-                    self.mj_scene, self.mj_camera,
-                )
-            elif imgui.is_key_down(imgui.Key.mouse_wheel_y):
-                mujoco.mjv_moveCamera(
-                    self.model, mujoco.mjtMouse.mjMOUSE_ZOOM,
-                    0.0, np.sign(mouse_wheel) * 0.05,
-                    self.mj_scene, self.mj_camera,
+        mujoco.mjv_movePerturb(
+            self.model, self.data, mujoco.mjtMouse.mjMOUSE_ROTATE_V,
+            0.0, dy, self.mj_scene, self.mj_perturb,
                 )
 
 
 class MuJoCoExtension(Extension):
-    """ MuJoCo """
+    """Standalone MuJoCo viewer for testing XML files."""
 
     def __init__(self):
         super().__init__(name="MuJoCo")
-
-        # Register windows
-        self._mujoco_win: MuJoCoWindow = MuJoCoWindow(self)
+        self._mujoco_win = MuJoCoWindow(self)
         self.register_window(self._mujoco_win)
         self._mujoco_win.initialize()
 
-    def __del__(self):
-        print("Terminating MuJoCo Extension")
-
-    def get_name(self) -> str:
-        return "MuJoCo"
+    def on_pre_frame(self):
+        """Render MuJoCo before ImGui frame — no FBO conflicts."""
+        self._mujoco_win.render_mujoco()
 
     def cleanup(self):
         pass

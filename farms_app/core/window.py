@@ -11,6 +11,7 @@ from imgui_bundle import imgui, em_to_vec2
 
 if TYPE_CHECKING:
     from farms_app.core.extension import Extension
+    from farms_app.core.layout import Rect
 
 E = TypeVar('E', bound='Extension')
 
@@ -66,6 +67,11 @@ class Window(Generic[E]):
         self._window_size: Optional[tuple[float, float]] = None
         self._window_pos: Optional[tuple[float, float]] = None
 
+        # Layout: optional default rect from RectCut (for floating windows)
+        self._default_rect: Optional[Rect] = None
+        # Layout reset: 0=idle, 2=undock next frame, 1=redock next frame
+        self._reset_dock_phase: int = 0
+
     def initialize(self):
         """Initialize the window - called once after creation."""
         if self._initialized:
@@ -87,11 +93,29 @@ class Window(Generic[E]):
     def _render(self) -> None:
         """Internal render call — wraps on_render() in imgui.begin()/end()."""
 
-        # Return if window is hidden
         if not self._visible:
+            self._reset_dock_phase = 0  # cancel pending reset
             return
 
-        imgui.set_next_window_size(em_to_vec2(25, 19), imgui.Cond_.first_use_ever)
+        # Layout: _default_rect takes precedence over auto-docking.
+        # Windows with a rect float at their RectCut position;
+        # windows without one dock into the extension's dockspace.
+        dock_id = self._extension.dockspace_id
+        if self._reset_dock_phase == 2:
+            imgui.set_next_window_dock_id(0, imgui.Cond_.always)
+            self._reset_dock_phase = 1
+        elif self._reset_dock_phase == 1:
+            if dock_id:
+                imgui.set_next_window_dock_id(dock_id, imgui.Cond_.always)
+            self._reset_dock_phase = 0
+        elif self._default_rect:
+            r = self._default_rect
+            imgui.set_next_window_pos(imgui.ImVec2(r.minx, r.miny), imgui.Cond_.first_use_ever)
+            imgui.set_next_window_size(imgui.ImVec2(r.width, r.height), imgui.Cond_.first_use_ever)
+        elif dock_id and self._extension.auto_dock_windows:
+            imgui.set_next_window_dock_id(dock_id, imgui.Cond_.first_use_ever)
+        else:
+            imgui.set_next_window_size(em_to_vec2(25, 19), imgui.Cond_.first_use_ever)
         expanded, self._visible = imgui.begin(
             self._window_id,
             self._visible,

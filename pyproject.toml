@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "farms_app"
-version = "0.1.18"
+version = "0.1.27"
 description = "GUI Application for neuromechanical simulations using FARMS"
 readme = "README.md"
 license = "Apache-2.0"
@@ -46,7 +46,7 @@ farms = [
     "farms_sim",
     "farms_mujoco",
     "farms_network",
-    "farms_muscle",
+    # "farms_muscle",
 ]
 
 [project.scripts]
@@ -67,7 +67,7 @@ status_bar = "farms_app.extensions.ui.status_bar:StatusBarExtension"
 debug = "farms_app.extensions.ui.logger:DebugExtension"
 farmsim = "farms_app.extensions.farmsim.extension:FARMSIMExtension"
 
-# mujoco = "farms_app.extensions.custom.mujoco_impl:MuJoCoExtension"
+mujoco = "farms_app.extensions.custom.mujoco_impl:MuJoCoExtension"
 # experimental = "farms_app.extensions.custom.experimental:ExperimentalExtension"
 # network = "farms_app.extensions.custom.network:NetworkExtension"
 # optimization = "farms_app.extensions.custom.optimization:OptimizationExtension"

@@ -3,15 +3,20 @@
 Walks a FARMS simulation and populates a DataRegistry with all
 plottable signals from sensors and network.
 """
-
 import numpy as np
 from farms_app.plots.data_registry import DataRegistry, DataSource
 from farms_core import pylog
 from farms_core.sensors.sensor_convention import sc
 
 
-def build_registry(sim) -> DataRegistry:
-    """Walk the simulation data and build a registry of all plottable signals."""
+def build_registry(sim, network=None) -> DataRegistry:
+    """Walk the simulation data and build a registry of all plottable signals.
+
+    Args:
+        sim: The FARMS simulation object.
+        network: Optional resolved network object. If provided, network signals
+            are registered. Pass ``None`` when no network is present.
+    """
     registry = DataRegistry()
 
     farms_data = sim.task.data.animats[0]
@@ -22,19 +27,14 @@ def build_registry(sim) -> DataRegistry:
     _register_muscles(registry, sensors.muscles)
     _register_contacts(registry, sensors.contacts)
 
-    # Network (may not exist)
-    try:
-        network = sim.task.extensions[0].network
-        _register_network(registry, network)
-    except (IndexError, AttributeError):
-        pass
+    if network is not None:
+        _register_network(network, registry)
 
     pylog.info(f"Data registry: {len(registry.sources)} signals in {len(registry.groups)} groups")
     return registry
 
 
-# ── Joints ───────────────────────────────────────────────────────────
-
+# Joints
 _JOINT_CHANNELS = [
     ("position",      sc.joint_position,     "rad"),
     ("velocity",      sc.joint_velocity,     "rad/s"),
@@ -65,8 +65,7 @@ def _register_joints(registry, joints):
             ))
 
 
-# ── Links ────────────────────────────────────────────────────────────
-
+# Links
 _LINK_CHANNELS = [
     ("com_pos_x", sc.link_com_position_x, "m"),
     ("com_pos_y", sc.link_com_position_y, "m"),
@@ -93,8 +92,7 @@ def _register_links(registry, links):
             ))
 
 
-# ── Muscles ──────────────────────────────────────────────────────────
-
+# Muscles
 _MUSCLE_CHANNELS = [
     ("excitation",      sc.muscle_excitation,     ""),
     ("activation",      sc.muscle_activation,     ""),
@@ -128,8 +126,7 @@ def _register_muscles(registry, muscles):
             ))
 
 
-# ── Contacts ─────────────────────────────────────────────────────────
-
+# Contacts
 _CONTACT_CHANNELS = [
     ("reaction_x", sc.contact_reaction_x, "N"),
     ("reaction_y", sc.contact_reaction_y, "N"),
@@ -156,12 +153,8 @@ def _register_contacts(registry, contacts):
             ))
 
 
-# ── Network ──────────────────────────────────────────────────────────
-
-def _register_network(registry, network):
-    if network is None:
-        return
-
+# Network
+def _register_network(network, registry: DataRegistry) -> None:
     log = network.log
 
     # Outputs

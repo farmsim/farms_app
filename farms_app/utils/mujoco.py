@@ -5,6 +5,14 @@ import numpy as np
 from imgui_bundle import imgui
 
 
+# mjv_moveCamera dropped 'scene' in 3.11.0
+_move_camera = (
+    (lambda model, action, reldx, reldy, scene, camera: mujoco.mjv_moveCamera(model, action, reldx, reldy, camera))
+    if mujoco.mj_version() >= 3011000 else
+    (lambda model, action, reldx, reldy, scene, camera: mujoco.mjv_moveCamera(model, action, reldx, reldy, scene, camera))
+)
+
+
 # ImGui key mapping for MuJoCo toggle keys
 MJ_IMGUI_KEYMAP = {
     # special keys
@@ -25,15 +33,13 @@ MJ_IMGUI_KEYMAP = {
 }
 
 # Geometry group toggle strings (matches MuJoCo's mjRNDSTRING/mjVISSTRING format)
+# Each entry: (name, enabled_str, key_char) — index j maps to option.geomgroup[j]
 MJ_GEOMSTRING = (
-    (
-        "Geom1", "1", "0",
-        "Geom2", "1", "1",
-        "Geom3", "1", "2",
-        "Geom4", "0", "3",
-        "Geom5", "0", "4",
-        "Geom6", "0", "5",
-    ),
+    ("Geom1", "1", "0"),
+    ("Geom2", "1", "1"),
+    ("Geom3", "1", "2"),
+    ("Geom4", "0", "3"),
+    ("Geom5", "0", "4"),
 )
 
 
@@ -52,9 +58,6 @@ def setup_scene(model, width, height, render_flags=None):
     camera = mujoco.MjvCamera()
     option = mujoco.MjvOption()
     option.flags[mujoco.mjtVisFlag.mjVIS_LIGHT] = True
-    model.vis.headlight.ambient[:] = [0.6] * 3
-    model.vis.headlight.diffuse[:] = [0.4] * 3
-    model.vis.headlight.specular[:] = [0.5] * 3
     perturb = mujoco.MjvPerturb()
     mujoco.mjv_defaultCamera(camera)
     mujoco.mjv_defaultPerturb(perturb)
@@ -123,25 +126,20 @@ def mouse_interactions(model, scene, camera, width, height):
     mouse_wheel = io.mouse_wheel
 
     if imgui.is_key_down(imgui.Key.mouse_left):
-        mujoco.mjv_moveCamera(
-            model, mujoco.mjtMouse.mjMOUSE_ROTATE_H,
-            -mouse_delta.x / width, 0.0, scene, camera,
+        _move_camera(
+            model, mujoco.mjtMouse.mjMOUSE_ROTATE_H, mouse_delta.x / width, 0.0, scene, camera
         )
-        mujoco.mjv_moveCamera(
-            model, mujoco.mjtMouse.mjMOUSE_ROTATE_V,
-            0.0, mouse_delta.y / height, scene, camera,
+        _move_camera(
+            model, mujoco.mjtMouse.mjMOUSE_ROTATE_V, 0.0, mouse_delta.y / height, scene, camera
         )
     elif imgui.is_key_down(imgui.Key.mouse_right):
-        mujoco.mjv_moveCamera(
-            model, mujoco.mjtMouse.mjMOUSE_MOVE_H,
-            -mouse_delta.x / width, 0.0, scene, camera,
+        _move_camera(
+            model, mujoco.mjtMouse.mjMOUSE_MOVE_H, mouse_delta.x / width, 0.0, scene, camera
         )
-        mujoco.mjv_moveCamera(
-            model, mujoco.mjtMouse.mjMOUSE_MOVE_V,
-            0.0, mouse_delta.y / height, scene, camera,
+        _move_camera(
+            model, mujoco.mjtMouse.mjMOUSE_MOVE_V, 0.0, mouse_delta.y / height, scene, camera
         )
     elif imgui.is_key_down(imgui.Key.mouse_wheel_y):
-        mujoco.mjv_moveCamera(
-            model, mujoco.mjtMouse.mjMOUSE_ZOOM,
-            0.0, np.sign(mouse_wheel) * 0.05, scene, camera,
+        _move_camera(
+            model, mujoco.mjtMouse.mjMOUSE_ZOOM, 0.0, np.sign(mouse_wheel) * 0.05, scene, camera
         )

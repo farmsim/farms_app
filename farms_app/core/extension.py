@@ -88,6 +88,7 @@ class ExtensionManager:
                 obj=ext_obj,
             )
             ext_obj.on_enable()
+            ext_obj.setup_default_layout()
             if name in self._saved_state:
                 ext_obj.on_restore_state(self._saved_state[name])
                 pylog.info(f"Restored state for {name}")
@@ -116,11 +117,21 @@ class ExtensionManager:
             console.print_exception(show_locals=True)
             return False
 
+    def pre_frame(self):
+        """Called before begin_frame — safe for raw GL rendering (no ImGui FBO)."""
+        for _name, enabled_ext in list(self._enabled_exts.items()):
+            try:
+                enabled_ext.obj.on_pre_frame()
+            except Exception as e:
+                console.print_exception()
+                pylog.error(f"Error in pre_frame for {_name}: {e}")
+
     def tick(self, dt: float):
         """Per-frame dispatch: update -> event -> render for all enabled extensions."""
         ft = self.frame_timer
         for name, enabled_ext in list(self._enabled_exts.items()):
             try:
+                enabled_ext.obj.dockspace_id = self.dockspace_id
                 if ft:
                     ft.begin_scope(name)
                     ft.begin_phase("update")
@@ -153,6 +164,12 @@ class ExtensionManager:
             except Exception as e:
                 pylog.error(f"Error saving state for {name}: {e}")
         return state
+
+    def reset_layout(self):
+        """Reset window layout for all enabled extensions."""
+        for name, ee in self._enabled_exts.items():
+            for window in ee.obj.windows.values():
+                window._reset_dock_phase = 2
 
     def reset_all_state(self):
         """Reset state for all enabled extensions to defaults."""
@@ -213,6 +230,7 @@ class Extension:
         self.name = name
         self.hide: bool = False
         self.dockspace_id: int = 0
+        self.auto_dock_windows: bool = True
         self.windows: dict[str, Window] = {}
         self.hooks = Hooks("pre_update", "post_update")
 
@@ -249,8 +267,19 @@ class Extension:
     def on_enable(self):
         """Called when extension is enabled."""
 
+    def setup_default_layout(self) -> None:
+        """Set up initial window layout. Called on first enable.
+
+        Default: ``auto_dock_windows`` is True, so windows tab into the
+        dockspace. Override to set ``auto_dock_windows = False`` and
+        assign ``_default_rect`` via RectCut for floating windows.
+        """
+
     def on_disable(self):
         """Called when extension is about to be disabled."""
+        for window in self.windows.values():
+            window._reset_dock_phase = 0
+            window._default_rect = None
 
     def pre_update(self, dt: float):
         """Called before on_update. Fires pre_update hooks."""
@@ -266,6 +295,11 @@ class Extension:
     def post_update(self, dt: float):
         """Called after on_update. Fires post_update hooks."""
         self.hooks["post_update"].fire(self, dt)
+
+    def on_pre_frame(self):
+        """Called before begin_frame — safe for raw GL rendering (fpr ex, no ImGui FBO).
+        Use this for offscreen rendering that must not disturb ImGui's state.
+        """
 
     def on_event(self):
         """Called once per frame for input handling."""

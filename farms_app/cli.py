@@ -1,5 +1,6 @@
 """ Run """
 
+import os
 import argparse
 
 from farms_core import pylog
@@ -19,6 +20,7 @@ def main():
     )
     parser.add_argument("--title", "-t", default=None, help="Window title override")
     parser.add_argument("--enable", "-e", nargs="+", default=None, help="Extensions to enable on startup")
+    parser.add_argument("--experiment", "-x", default=None, help="Path to experiment config file to load on startup")
     parser.add_argument("--log-level", "-l", default=None, choices=["debug", "info", "warning", "error"], help="Log level")
     args = parser.parse_args()
 
@@ -32,7 +34,20 @@ def main():
     if args.enable:
         options.extension.auto_enable = args.enable
 
+    # If experiment path is provided, ensure farmsim is enabled
+    if args.experiment:
+        if not options.extension.auto_enable:
+            options.extension.auto_enable = []
+        if "farmsim" not in options.extension.auto_enable:
+            options.extension.auto_enable.append("farmsim")
+
     app = FARMSApplication(options, options_path=args.options)
+
+    # If experiment path is provided, store it for FARMSIM extension to load
+    if args.experiment:
+        # Convert to absolute path to avoid issues with cwd changes in load_experiment
+        app.experiment_path = os.path.abspath(args.experiment)
+
     app.run()
 
 

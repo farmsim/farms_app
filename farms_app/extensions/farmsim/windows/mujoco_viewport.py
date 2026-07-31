@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 import mujoco
 import numpy as np
-from farms_app.backends.renderer.gl_framebuffer import MSAAFramebuffer
+from farms_app.core.widget import PlaybackState
 from farms_app.core.window import Window
 from farms_app.utils.mujoco import (
     setup_scene, mouse_interactions, keyboard_interactions,
@@ -30,13 +30,16 @@ class MuJoCoViewportWindow(Window["FARMSIMExtension"]):
         self.width = width
         self.height = height
 
-        self.fb = None
         self.mj_camera = None
         self.mj_option = None
         self.mj_perturb = None
         self.mj_scene = None
         self.mj_context = None
         self.mj_viewport = None
+
+        self._resolve_fbo = 0
+        self._resolve_tex = 0
+        self._needs_resolve_fbo = False
 
         self._viewer_pos = None
         self._viewer_size = None
@@ -54,13 +57,86 @@ class MuJoCoViewportWindow(Window["FARMSIMExtension"]):
         render_flags = {
             mujoco.mjtRndFlag.mjRND_SKYBOX: True,
             mujoco.mjtRndFlag.mjRND_REFLECTION: True,
-            mujoco.mjtRndFlag.mjRND_SHADOW: False,
+            mujoco.mjtRndFlag.mjRND_SHADOW: True,
         }
         (self.mj_camera, self.mj_option, self.mj_perturb,
          self.mj_context, self.mj_scene, self.mj_viewport) = setup_scene(
             self.model, self.width, self.height, render_flags=render_flags,
         )
-        self.fb = MSAAFramebuffer(self.width, self.height, samples=4)
+        self._needs_resolve_fbo = True
+
+    def _create_resolve_fbo(self, width: int, height: int):
+        """Create a simple FBO with a texture attachment for ImGui display."""
+        import OpenGL
+        import OpenGL.GL as GL
+        _prev = OpenGL.ERROR_CHECKING
+        OpenGL.ERROR_CHECKING = False
+        try:
+            if self._resolve_fbo:
+                GL.glDeleteFramebuffers(1, [self._resolve_fbo])
+                GL.glDeleteTextures([self._resolve_tex])
+
+            self._resolve_tex = GL.glGenTextures(1)
+            GL.glBindTexture(GL.GL_TEXTURE_2D, self._resolve_tex)
+            GL.glTexImage2D(
+                GL.GL_TEXTURE_2D, 0, GL.GL_RGBA8,
+                width, height, 0,
+                GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, None,
+            )
+            GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MIN_FILTER, GL.GL_LINEAR)
+            GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MAG_FILTER, GL.GL_LINEAR)
+
+            self._resolve_fbo = GL.glGenFramebuffers(1)
+            GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, self._resolve_fbo)
+            GL.glFramebufferTexture2D(
+                GL.GL_FRAMEBUFFER, GL.GL_COLOR_ATTACHMENT0,
+                GL.GL_TEXTURE_2D, self._resolve_tex, 0,
+            )
+            GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, 0)
+            GL.glBindTexture(GL.GL_TEXTURE_2D, 0)
+        finally:
+            OpenGL.ERROR_CHECKING = _prev
+        self._needs_resolve_fbo = False
+
+    def render_mujoco(self):
+        """Render MuJoCo scene to offscreen FBO, blit to texture. Called before ImGui frame."""
+        import OpenGL.GL as GL
+        if self.mj_context is None:
+            return
+        if self._needs_resolve_fbo:
+            mujoco.mjr_resizeOffscreen(self.width, self.height, self.mj_context)
+            self._create_resolve_fbo(self.mj_context.offWidth, self.mj_context.offHeight)
+
+        mujoco.mjr_setBuffer(mujoco.mjtFramebuffer.mjFB_OFFSCREEN, self.mj_context)
+
+        mujoco.mjv_updateScene(
+            self.model, self.data,
+            self.mj_option, self.mj_perturb, self.mj_camera,
+            mujoco.mjtCatBit.mjCAT_ALL, self.mj_scene,
+        )
+        mujoco.mjr_render(self.mj_viewport, self.mj_scene, self.mj_context)
+
+        # Flush stale GL errors from MuJoCo's legacy rendering (C call, bypasses PyOpenGL)
+        while mujoco.mjr_getError():
+            pass
+
+        # Blit from MuJoCo's offscreen renderbuffer to our texture FBO
+        off_w = self.mj_context.offWidth
+        off_h = self.mj_context.offHeight
+        GL.glBindFramebuffer(GL.GL_READ_FRAMEBUFFER, int(self.mj_context.offFBO))
+        GL.glBindFramebuffer(GL.GL_DRAW_FRAMEBUFFER, int(self._resolve_fbo))
+        GL.glBlitFramebuffer(
+            0, 0, off_w, off_h,
+            0, 0, off_w, off_h,
+            GL.GL_COLOR_BUFFER_BIT, GL.GL_NEAREST,
+        )
+        # Force alpha=1 (MuJoCo clears to alpha=0, ImGui blends as transparent)
+        GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, int(self._resolve_fbo))
+        GL.glColorMask(GL.GL_FALSE, GL.GL_FALSE, GL.GL_FALSE, GL.GL_TRUE)
+        GL.glClearColor(0.0, 0.0, 0.0, 1.0)
+        GL.glClear(GL.GL_COLOR_BUFFER_BIT)
+        GL.glColorMask(GL.GL_TRUE, GL.GL_TRUE, GL.GL_TRUE, GL.GL_TRUE)
+        GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, 0)
 
     def on_render(self):
         ext = self._extension
@@ -86,15 +162,15 @@ class MuJoCoViewportWindow(Window["FARMSIMExtension"]):
         self._render_scene()
 
     def _resize(self, width: int, height: int):
-        """Resize framebuffer and MuJoCo viewport to new dimensions."""
+        """Mark resize needed (actual resize happens in pre-frame)."""
         self.width = width
         self.height = height
-        self.fb.resize(width, height)
         self.mj_viewport.width = width
         self.mj_viewport.height = height
+        self._needs_resolve_fbo = True
 
     def _render_scene(self):
-        """Render MuJoCo scene to framebuffer and display as ImGui image."""
+        """Display pre-rendered MuJoCo texture as ImGui image."""
         self._viewer_pos = imgui.get_cursor_screen_pos()
 
         avail_w, avail_h = imgui.get_content_region_avail()
@@ -105,29 +181,25 @@ class MuJoCoViewportWindow(Window["FARMSIMExtension"]):
         if new_w != self.width or new_h != self.height:
             self._resize(new_w, new_h)
 
-        self.fb.bind()
-        mujoco.mjv_updateScene(
-            self.model, self.data,
-            self.mj_option, self.mj_perturb, self.mj_camera,
-            mujoco.mjtCatBit.mjCAT_ALL, self.mj_scene,
-        )
-        mujoco.mjr_render(self.mj_viewport, self.mj_scene, self.mj_context)
-        self.fb.unbind()
-        self.fb.resolve()
-
         imgui.image(
-            imgui.ImTextureRef(self.fb.texture_id),
+            imgui.ImTextureRef(self._resolve_tex),
             imgui.ImVec2(avail_w, avail_h),
-            uv0=imgui.ImVec2(1, 1),
-            uv1=imgui.ImVec2(0, 0),
+            uv0=imgui.ImVec2(0, 1),
+            uv1=imgui.ImVec2(1, 0),
         )
         self._viewer_size = imgui.get_item_rect_size()
         self.is_scene_hovered = imgui.is_item_hovered()
 
     # ── Input handling ─────────────────────────────────────────────────
-
     def handle_input(self):
         """Process mouse input for camera and perturbation. Called by the extension."""
+        # Handle space key for play/pause toggle
+        if imgui.is_key_pressed(imgui.Key.space):
+            if self._extension.playback_state == PlaybackState.PLAYING:
+                self._extension._pause()
+            else:
+                self._extension._play()
+
         if not self.is_scene_hovered:
             if self.mj_perturb.active != 0:
                 self.mj_perturb.active = 0
@@ -208,11 +280,12 @@ class MuJoCoViewportWindow(Window["FARMSIMExtension"]):
     def _screen_to_mujoco(self, mouse_pos):
         """Convert ImGui screen coords to MuJoCo framebuffer coords.
 
-        Accounts for UV flip (uv0=1,1  uv1=0,0) in imgui.image().
+        UV is uv0=(0,1), uv1=(1,0): vertical flip only (OpenGL bottom-origin).
+        X maps directly; Y is inverted.
         """
         rel_x = mouse_pos.x - self._viewer_pos.x
         rel_y = mouse_pos.y - self._viewer_pos.y
-        gl_x = int((1.0 - rel_x / self._viewer_size.x) * self.width)
+        gl_x = int(rel_x / self._viewer_size.x * self.width)
         gl_y = int((1.0 - rel_y / self._viewer_size.y) * self.height)
         return gl_x, gl_y
 
@@ -247,8 +320,7 @@ class MuJoCoViewportWindow(Window["FARMSIMExtension"]):
 
     def _perturb_translate(self, mouse_delta):
         """Ctrl + drag: update perturbation reference position."""
-        # Negate deltas to account for UV flip (uv0=1,1 uv1=0,0)
-        dx = -mouse_delta.x / self.width
+        dx = mouse_delta.x / self.width
         dy = mouse_delta.y / self.height
         mujoco.mjv_movePerturb(
             self.model, self.data, mujoco.mjtMouse.mjMOUSE_MOVE_H,
@@ -261,7 +333,7 @@ class MuJoCoViewportWindow(Window["FARMSIMExtension"]):
 
     def _perturb_rotate(self, mouse_delta):
         """Ctrl + Shift + drag: update perturbation reference orientation."""
-        dx = -mouse_delta.x / self.width
+        dx = mouse_delta.x / self.width
         dy = mouse_delta.y / self.height
         mujoco.mjv_movePerturb(
             self.model, self.data, mujoco.mjtMouse.mjMOUSE_ROTATE_H,

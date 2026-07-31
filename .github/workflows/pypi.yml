@@ -2,19 +2,19 @@ name: Build and Publish to PyPI
 
 on:
   push:
-    branches: [main]
+    branches: [main, 4-setup-main-architecture]
   pull_request:
     branches: [main]
   release:
     types: [published]
 
-jobs:
-  build_wheels:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest, macos-15-intel, windows-latest]
+env:
+  PIP_INDEX_URL: https://test.pypi.org/simple/
+  PIP_EXTRA_INDEX_URL: https://pypi.org/simple/
 
+jobs:
+  build:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
         with:
@@ -22,44 +22,30 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.x"
-      - run: pip install cibuildwheel
-      - run: cibuildwheel --output-dir wheelhouse
-      - uses: actions/upload-artifact@v5
-        with:
-          name: wheels-${{ matrix.os }}
-          path: wheelhouse/*.whl
-
-  build_sdist:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
       - run: pip install build
-      - run: python -m build --sdist
+      - run: python -m build
       - uses: actions/upload-artifact@v5
         with:
-          name: sdist
-          path: dist/*.tar.gz
+          name: dist
+          path: dist/
 
-  publish_to_pypi:
-    name: >-
-      Publish Python 🐍 distribution 📦 to PyPI
-    needs: [build_wheels, build_sdist]
+  publish_to_testpypi:
+    name: Publish to TestPyPI (dev branch)
+    needs: build
     runs-on: ubuntu-latest
-    if: github.event_name == 'release'
+    if: |
+      github.ref == 'refs/heads/4-setup-main-architecture' &&
+      contains(github.event.head_commit.message, '[VERSION]')
     environment:
-      name: pypi
-      # url: https://pypi.org/p/farms-app # For PyPI
-      url: https://test.pypi.org/p/farms-app # For TestPyPI
+      name: testpypi
+      url: https://test.pypi.org/p/farms-app
     permissions:
       id-token: write
     steps:
-      - uses: actions/checkout@v6
-      - name: Download all the dists
-        uses: actions/download-artifact@v6
+      - uses: actions/download-artifact@v6
         with:
+          name: dist
           path: dist/
-          merge-multiple: true
-      - name: Publish distribution 📦 to TestPyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+      - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           repository-url: https://test.pypi.org/legacy/

@@ -57,6 +57,9 @@ class FARMSApplication:
         # Screenshot: path set by menu after pfd dialog, forwarded to backend next frame
         self._screenshot_path: str | None = None
 
+        # Experiment path to load on startup (set by CLI)
+        self.experiment_path: str | None = None
+
         # Input
         self.input_manager: InputManager = InputManager()
 
@@ -117,8 +120,15 @@ class FARMSApplication:
         """ Render menu """
         render_main_menu(self)
 
-    def run(self):
-        """main run method"""
+    def run(self, on_ready=None):
+        """Main run method.
+
+        Args:
+            on_ready: Optional callback ``f(app)`` invoked once on the first
+                      frame, after extensions are enabled and the dockspace
+                      is ready. Use this to register windows, connect hooks,
+                      and load data — the dockspace_id is guaranteed valid.
+        """
 
         _first = True
         _last_time = time.perf_counter()
@@ -143,6 +153,9 @@ class FARMSApplication:
                     self.backend._screenshot_path = self._screenshot_path
                     self._screenshot_path = None
 
+                # Pre-frame: raw GL rendering (before ImGui)
+                self.extension_manager.pre_frame()
+
                 # Start the Dear ImGui frame
                 self.backend.begin_frame()
                 self.dockspace_id = imgui.dock_space_over_viewport(
@@ -156,10 +169,17 @@ class FARMSApplication:
                 # Render main menu
                 self.render_menu()
 
+                self.extension_manager.dockspace_id = self.dockspace_id
+
                 if _first:
-                    self.extension_manager.dockspace_id = self.dockspace_id
                     for ext_name in self._options.extension.auto_enable:
                         self.extension_manager.enable(ext_name)
+                    # If experiment path is provided, load it in farmsim extension
+                    if self.experiment_path:
+                        farmsim_ext = self.extension_manager.get("farmsim")
+                        farmsim_ext.load_experiment(self.experiment_path)
+                    if on_ready:
+                        on_ready(self)
                     _first = False
 
                 # Global shortcuts (suppressed when modal open or typing)

@@ -70,6 +70,9 @@ def render_main_menu(app):
                 if clicked:
                     extension.obj.hide = not new_state
             imgui.end_menu()
+        imgui.separator()
+        if imgui.menu_item_simple("Reset Layout"):
+            app.extension_manager.reset_layout()
         imgui.end_menu()
 
     # Extensions

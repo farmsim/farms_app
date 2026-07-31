@@ -73,6 +73,7 @@ class PlotConfig:
     axis_limits: dict | None = None  # {"x": (min, max), "y": (min, max)}
     reference_curves: list[ReferenceCurve] = field(default_factory=list)
     signal_styles: dict[str, SignalStyle] = field(default_factory=dict)
+    y_transform: object = None  # callable(ndarray) -> ndarray, or None
 
 
 @dataclass
@@ -594,6 +595,8 @@ class PlotWindow(Window):
                     continue
 
                 y_data = np.ascontiguousarray(source.accessor())
+                if plot_cfg.y_transform is not None:
+                    y_data = np.ascontiguousarray(plot_cfg.y_transform(y_data))
                 label = "/".join(source_name.split("/")[-2:])
                 style = plot_cfg.signal_styles.get(source_name)
 

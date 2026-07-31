@@ -160,7 +160,7 @@ class PropertiesWindow(Window["FARMSIMExtension"]):
             float(node_data.external_input.values),
             v_speed=0.05,
             v_min=0.0,
-            v_max=1.5,
+            v_max=5.0,
             format=f"{name}  %.3f",
         )
 

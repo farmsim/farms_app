@@ -79,6 +79,9 @@ class NetworkVisualizerWindow(Window["FARMSIMExtension"]):
         self._needs_fit = False
         self._show_names = True
         self._tikz_neuron_shading = "ball"
+        # Optional callable(raw_output: float) -> float in [0, 1].
+        # Set this from app.py to remap model-specific outputs (e.g. phase → cos).
+        self.activation_transform = None
 
     @property
     def network(self):
@@ -184,7 +187,8 @@ class NetworkVisualizerWindow(Window["FARMSIMExtension"]):
                 outputs = net.data.outputs.array
             for index, node in enumerate(nodes):
                 pos = implot.plot_to_pixels(node.visual['position'][:2])
-                activation = float(outputs[index]) if index < len(outputs) else 0.0
+                raw = float(outputs[index]) if index < len(outputs) else 0.0
+                activation = self.activation_transform(raw) if self.activation_transform is not None else raw
 
                 implot.push_plot_clip_rect()
                 self._draw_node(

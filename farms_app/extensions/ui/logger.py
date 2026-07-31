@@ -1,81 +1,153 @@
-""" Logger """
+"""Logger — GUI log window using farms_core's GuiLogHandler."""
+
+import logging
 
 from colorama import Fore
+from farms_app.core.extension import Extension
+from farms_app.core.window import Window
 from farms_core import pylog
+from farms_core.pylog.log import GuiLogHandler, LogFormatter
 from imgui_bundle import imgui
+from imgui_bundle import portable_file_dialogs as pfd
 
-from farms_app.core.extension import UIExtension
-from farms_app.core.window import BaseWindow
-
-
-ANSI_RGB_MAP = {
-    Fore.CYAN: (0, 1.0, 1.0, 1.0),
-    Fore.GREEN: (0, 1.0, 0, 1.0),
-    Fore.YELLOW: (1.0, 1.0, 0, 1.0),
-    Fore.RED: (1.0, 0, 0, 1.0),
-    Fore.MAGENTA: (1.0, 0, 1.0, 1.0),
+# Map colorama Fore codes to RGBA for imgui rendering
+_FORE_TO_RGBA = {
+    Fore.CYAN:    (0.20, 0.80, 0.80, 1.0),
+    Fore.GREEN:   (0.20, 0.80, 0.20, 1.0),
+    Fore.YELLOW:  (0.80, 0.80, 0.20, 1.0),
+    Fore.RED:     (0.80, 0.20, 0.20, 1.0),
+    Fore.MAGENTA: (0.80, 0.30, 0.80, 1.0),
 }
 
+_DEFAULT_COLOR = (0.85, 0.85, 0.85, 1.0)
 
-class DebugExtension(UIExtension):
-    """ Logger """
+
+def _color_to_rgba(color):
+    """Convert a colorama Fore string or RGBA tuple to an RGBA tuple."""
+    if isinstance(color, tuple):
+        return color
+    return _FORE_TO_RGBA.get(color, _DEFAULT_COLOR)
+
+
+_LEVELS = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
+_LEVEL_VALUES = [logging.DEBUG, logging.INFO, logging.WARNING, logging.ERROR, logging.CRITICAL]
+
+_FILTER_LABELS = ['All', 'Debug', 'Info', 'Warning', 'Error']
+_FILTER_VALUES = [logging.DEBUG, logging.DEBUG, logging.INFO, logging.WARNING, logging.ERROR]
+
+
+class DebugExtension(Extension):
+    """Logger extension — pipes pylog output into an imgui window."""
 
     def __init__(self):
-        name = "Debug"
-        super().__init__(name=name)
+        super().__init__(name="Debug")
+        self.handler = GuiLogHandler()
         self.register_window(LoggerWindow(self))
 
-    def get_dependencies(self):
-        """ Get extension dependencies """
+    def on_enable(self):
+        pylog.LOGGER.addHandler(self.handler)
+        self.init_windows()
 
     def cleanup(self):
-        """ Cleanup resources before unloading the extension """
+        pylog.LOGGER.removeHandler(self.handler)
 
 
-class LoggerWindow(BaseWindow):
-    """ Render Status Bar """
+class LoggerWindow(Window["DebugExtension"]):
+    """Scrollable log window with level filtering and output controls."""
 
-    def __init__(self, extension) -> None:
-        name: str = "log"
-        window_flags = (
-            imgui.WindowFlags_.no_title_bar |
-            imgui.WindowFlags_.no_resize |
-            imgui.WindowFlags_.no_move |
-            imgui.WindowFlags_.no_scrollbar |
-            imgui.WindowFlags_.no_collapse |
-            imgui.WindowFlags_.no_scroll_with_mouse |
-            imgui.WindowFlags_.no_bring_to_front_on_focus |
-            imgui.WindowFlags_.no_nav_focus
-        )
-        super().__init__(
-            name=name,
-            extension=extension,
-            visible=True,
-            dock_to_extension=False
-        )
+    def __init__(self, extension: DebugExtension):
+        super().__init__(name="Log", extension=extension)
+        self._auto_scroll = True
+        self._filter_idx = 0
+        self._filter_level = logging.DEBUG
 
-    def on_initialize(self):
-        """ On initialize """
+        # Logger level control
+        self._level_idx = _LEVELS.index(pylog.get_level().upper()) if pylog.get_level().upper() in _LEVELS else 0
 
-    def on_update(self):
-        """ On update """
+        # Output toggles
+        self._term_enabled = pylog.LOGGER.ch is not None
+        self._file_enabled = pylog.LOGGER.fh is not None
+        self._log_file_path = ""
 
     def on_render(self):
-        """ Render main extension dockspace """
-        if imgui.begin_popup("Options"):
-            imgui.checkbox("Auto-scroll", True)
-            imgui.end_popup()
+        handler: GuiLogHandler = self._extension.handler
 
-        # Main window
-        if imgui.button("Options"):
-            imgui.open_popup("Options")
-        imgui.same_line()
-        clear = imgui.button("Clear")
-        imgui.same_line()
-        copy = imgui.button("Copy")
+        self._render_toolbar(handler)
+        imgui.separator()
+        self._render_log_content(handler)
 
-        if imgui.begin_child("scrolling", imgui.ImVec2((0, 0)), imgui.ChildFlags_.none, imgui.WindowFlags_.horizontal_scrollbar):
-            # for color, line in pylog.LOGGER.get_gui_logs():
-            #      imgui.text_colored(imgui.ImVec4(*ANSI_RGB_MAP.get(color)), line)
-            imgui.text("Hello world!")
+    def _render_toolbar(self, handler):
+        # Clear
+        if imgui.button("Clear"):
+            handler.clear()
+        imgui.same_line()
+
+        # Filter level (what to show in this window)
+        imgui.set_next_item_width(90)
+        changed, self._filter_idx = imgui.combo(
+            "Filter##filter", self._filter_idx, _FILTER_LABELS,
+        )
+        if changed:
+            self._filter_level = _FILTER_VALUES[self._filter_idx]
+        imgui.same_line()
+
+        # Auto-scroll
+        _, self._auto_scroll = imgui.checkbox("Auto-scroll", self._auto_scroll)
+
+        # Logger level (what gets emitted globally)
+        imgui.set_next_item_width(90)
+        changed, self._level_idx = imgui.combo(
+            "Log level", self._level_idx, _LEVELS,
+        )
+        if changed:
+            pylog.set_level(_LEVELS[self._level_idx].lower())
+
+        imgui.same_line()
+
+        # Terminal output toggle
+        changed, self._term_enabled = imgui.checkbox("Terminal", self._term_enabled)
+        if changed:
+            if self._term_enabled and pylog.LOGGER.ch is None:
+                pylog.LOGGER.ch = pylog.LOGGER.init_rich_handler(
+                    level=_LEVEL_VALUES[self._level_idx],
+                )
+            elif not self._term_enabled and pylog.LOGGER.ch is not None:
+                pylog.LOGGER.removeHandler(pylog.LOGGER.ch)
+                pylog.LOGGER.ch = None
+
+        imgui.same_line()
+
+        # File output toggle
+        changed, self._file_enabled = imgui.checkbox("File", self._file_enabled)
+        if changed:
+            if self._file_enabled:
+                result = pfd.save_file("Log file", "farms.log", ["*.log", "*.txt"]).result()
+                if result:
+                    self._log_file_path = result
+                    pylog.LOGGER.log2file(result)
+                    self._file_enabled = True
+                else:
+                    self._file_enabled = False
+            else:
+                if pylog.LOGGER.fh is not None:
+                    pylog.LOGGER.removeHandler(pylog.LOGGER.fh)
+                    pylog.LOGGER.fh = None
+
+        if self._file_enabled and self._log_file_path:
+            imgui.same_line()
+            imgui.text_disabled(self._log_file_path)
+
+    def _render_log_content(self, handler):
+        flags = imgui.WindowFlags_.horizontal_scrollbar
+        if imgui.begin_child("scrolling", imgui.ImVec2(0, 0), imgui.ChildFlags_.none, flags):
+            for level, color, msg in handler.logs:
+                if level < self._filter_level:
+                    continue
+                rgba = _color_to_rgba(color)
+                for line in msg.split('\n'):
+                    if line:
+                        imgui.text_colored(imgui.ImVec4(*rgba), line)
+
+            if self._auto_scroll and imgui.get_scroll_y() >= imgui.get_scroll_max_y():
+                imgui.set_scroll_here_y(1.0)
         imgui.end_child()

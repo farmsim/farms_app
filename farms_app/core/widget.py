@@ -193,16 +193,20 @@ class SimulationToolbar:
         self._separator(height=btn_size.y)
         imgui.same_line(spacing=6)
 
-        # ── Speed cycle button ─────────────────────────────────────────────
-        speed_label = f"{speed:g}x##speed"
-        imgui.push_style_var(imgui.StyleVar_.frame_padding, em_to_vec2(0.375, 0.25))
-        if imgui.button(speed_label, size=em_to_vec2(2.75, 1.6)):
-            next_speed = self._next_speed(speed)
-            if self.on_speed_change:
-                self.on_speed_change(next_speed)
-        imgui.pop_style_var()
+        # ── Speed slider (steps in powers of 2: ..., ¼, ½, 1, 2, 4, ...) ─
+        import math
+        log_min, log_max = -3, 3  # 2^-3=⅛  to  2^3=8
+        log_val = round(math.log2(max(0.125, speed)))
+        log_val = max(log_min, min(log_max, log_val))
+        label = f"1/{1 << -log_val}x" if log_val < 0 else f"{1 << log_val}x"
+        imgui.set_next_item_width(em_to_vec2(7.0, 0).x)
+        changed, new_log = imgui.slider_int(
+            "##speed", log_val, log_min, log_max, label,
+        )
+        if changed and self.on_speed_change:
+            self.on_speed_change(2.0 ** new_log)
         if imgui.is_item_hovered():
-            imgui.set_tooltip("Cycle playback speed")
+            imgui.set_tooltip("Playback speed")
 
         # ── Separator ──────────────────────────────────────────────────────
         imgui.same_line(spacing=6)

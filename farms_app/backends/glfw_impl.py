@@ -1,11 +1,20 @@
 """ Generalized OpenGL 2/3 Support """
 
 
+import os
 import platform
 import sys
 from enum import Enum
 from typing import Tuple, Any
 import ctypes
+
+
+# On Wayland, force X11/XWayland mode for GLFW and PyOpenGL compatibility.
+# Set this before any `import OpenGL` to avoid "no valid context" errors.
+# https://github.com/pthom/imgui_bundle/issues/321
+if platform.system() == "Linux" and os.getenv("XDG_SESSION_TYPE") == "wayland":
+    os.environ["XDG_SESSION_TYPE"] = "x11"
+    os.environ.setdefault("PYOPENGL_PLATFORM", "x11")
 
 from .base import BaseBackend
 from farms_core import pylog
