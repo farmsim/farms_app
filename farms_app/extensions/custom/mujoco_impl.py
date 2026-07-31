@@ -75,16 +75,16 @@ class MuJoCoWindow(Window):
     def load_model(self, path: str):
         """Load a MuJoCo model from an XML file."""
         self.model = mujoco.MjModel.from_xml_path(path)
-                    self.data = mujoco.MjData(self.model)
-                    render_flags = {
-                        mujoco.mjtRndFlag.mjRND_SKYBOX: True,
-                        mujoco.mjtRndFlag.mjRND_REFLECTION: True,
-                        mujoco.mjtRndFlag.mjRND_SHADOW: True,
-                    }
-                    (self.mj_camera, self.mj_option, self.mj_perturb,
-                     self.mj_context, self.mj_scene, self.mj_viewport) = setup_scene(
-                         self.model, self.width, self.height, render_flags=render_flags,
-                    )
+        self.data = mujoco.MjData(self.model)
+        render_flags = {
+            mujoco.mjtRndFlag.mjRND_SKYBOX: True,
+            mujoco.mjtRndFlag.mjRND_REFLECTION: True,
+            mujoco.mjtRndFlag.mjRND_SHADOW: True,
+        }
+        (self.mj_camera, self.mj_option, self.mj_perturb,
+         self.mj_context, self.mj_scene, self.mj_viewport) = setup_scene(
+            self.model, self.width, self.height, render_flags=render_flags,
+        )
         self._needs_resolve_fbo = True
 
     def render_mujoco(self):
@@ -282,15 +282,15 @@ class MuJoCoWindow(Window):
     def _perturb_translate(self, mouse_delta):
         """Ctrl + drag: update perturbation reference position."""
         dx = mouse_delta.x / self.width
-                dy = mouse_delta.y / self.height
-                    mujoco.mjv_movePerturb(
-                        self.model, self.data, mujoco.mjtMouse.mjMOUSE_MOVE_H,
-                        dx, 0.0, self.mj_scene, self.mj_perturb,
-                    )
-                    mujoco.mjv_movePerturb(
-                        self.model, self.data, mujoco.mjtMouse.mjMOUSE_MOVE_V,
-                        0.0, dy, self.mj_scene, self.mj_perturb,
-                    )
+        dy = mouse_delta.y / self.height
+        mujoco.mjv_movePerturb(
+            self.model, self.data, mujoco.mjtMouse.mjMOUSE_MOVE_H,
+            dx, 0.0, self.mj_scene, self.mj_perturb,
+        )
+        mujoco.mjv_movePerturb(
+            self.model, self.data, mujoco.mjtMouse.mjMOUSE_MOVE_V,
+            0.0, dy, self.mj_scene, self.mj_perturb,
+        )
 
     def _perturb_rotate(self, mouse_delta):
         """Ctrl + Shift + drag: update perturbation reference orientation."""
@@ -299,11 +299,11 @@ class MuJoCoWindow(Window):
         mujoco.mjv_movePerturb(
             self.model, self.data, mujoco.mjtMouse.mjMOUSE_ROTATE_H,
             dx, 0.0, self.mj_scene, self.mj_perturb,
-                )
+        )
         mujoco.mjv_movePerturb(
             self.model, self.data, mujoco.mjtMouse.mjMOUSE_ROTATE_V,
             0.0, dy, self.mj_scene, self.mj_perturb,
-                )
+        )
 
 
 class MuJoCoExtension(Extension):
