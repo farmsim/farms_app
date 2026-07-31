@@ -2,7 +2,7 @@ name: Build and Publish to PyPI
 
 on:
   push:
-    branches: [main, 4-setup-main-architecture]
+    branches: [main, merge_v0.2]
   pull_request:
     branches: [main]
   release:
@@ -34,7 +34,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     if: |
-      github.ref == 'refs/heads/4-setup-main-architecture' &&
+      github.ref == 'refs/heads/merge_v0.2' &&
       contains(github.event.head_commit.message, '[VERSION]')
     environment:
       name: testpypi
