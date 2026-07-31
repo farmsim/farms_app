@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "farms_app"
-version = "0.1.27"
+version = "0.1.28"
 description = "GUI Application for neuromechanical simulations using FARMS"
 readme = "README.md"
 license = "Apache-2.0"
