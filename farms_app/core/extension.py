@@ -1,6 +1,7 @@
 """ Extensions management and implementation """
 
 import inspect
+from typing import Optional
 
 from farms_app.console import console
 from farms_app.core.hooks import Hooks
@@ -83,6 +84,7 @@ class ExtensionManager:
             _ext = self._mgr[name]
             ext_obj = _ext.plugin()
             ext_obj.dockspace_id = self.dockspace_id
+            ext_obj.extension_manager = self
             self._enabled_exts[name] = EnabledExtension(
                 entry_point=_ext.entry_point,
                 obj=ext_obj,
@@ -233,6 +235,7 @@ class Extension:
         self.auto_dock_windows: bool = True
         self.windows: dict[str, Window] = {}
         self.hooks = Hooks("pre_update", "post_update")
+        self.extension_manager: Optional[ExtensionManager] = None
 
     ###########
     # Windows #
