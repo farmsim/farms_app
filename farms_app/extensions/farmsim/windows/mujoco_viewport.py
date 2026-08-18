@@ -11,6 +11,7 @@ from farms_app.core.window import Window
 from farms_app.utils.mujoco import (
     setup_scene, mouse_interactions, keyboard_interactions,
 )
+from farms_core import pylog
 from imgui_bundle import imgui
 
 if TYPE_CHECKING:
@@ -54,6 +55,10 @@ class MuJoCoViewportWindow(Window["FARMSIMExtension"]):
         return self._extension.sim.physics.data._data
 
     def on_initialize(self):
+        # First, completely clean up any existing MuJoCo objects to avoid
+        # caching issues
+        self._cleanup_mujoco_resources()
+
         render_flags = {
             mujoco.mjtRndFlag.mjRND_SKYBOX: True,
             mujoco.mjtRndFlag.mjRND_REFLECTION: True,
@@ -64,6 +69,33 @@ class MuJoCoViewportWindow(Window["FARMSIMExtension"]):
             self.model, self.width, self.height, render_flags=render_flags,
         )
         self._needs_resolve_fbo = True
+
+    def _cleanup_mujoco_resources(self):
+        """Completely clean up all MuJoCo visualization resources."""
+        try:
+            # Clean up OpenGL resources
+            if hasattr(self, '_resolve_fbo') and self._resolve_fbo:
+                import OpenGL.GL as GL
+                GL.glDeleteFramebuffers(1, [self._resolve_fbo])
+                self._resolve_fbo = 0
+            if hasattr(self, '_resolve_tex') and self._resolve_tex:
+                import OpenGL.GL as GL
+                GL.glDeleteTextures([self._resolve_tex])
+                self._resolve_tex = 0
+
+            # Clean up MuJoCo objects - set to None to allow garbage collection
+            # MuJoCo objects will be automatically cleaned up when no references
+            # remain
+            self.mj_scene = None
+            self.mj_context = None
+            self.mj_camera = None
+            self.mj_option = None
+            self.mj_perturb = None
+            self.mj_viewport = None
+
+            pylog.debug("MuJoCo viewport resources completely cleaned up")
+        except Exception as e:
+            pylog.warning(f"Failed to clean up MuJoCo viewport resources: {e}")
 
     def _create_resolve_fbo(self, width: int, height: int):
         """Create a simple FBO with a texture attachment for ImGui display."""

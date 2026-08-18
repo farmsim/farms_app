@@ -362,7 +362,14 @@ class FARMSIMExtension(Extension):
 
     # Experiment loading
     def load_experiment(self, path: str = None):
-        """Load an experiment config and set up the simulation."""
+        """Load an experiment config and set up the simulation.
+
+        Cleans up any previous simulation state (including MuJoCo viewport
+        resources) before loading the new experiment so that meshes and
+        geometries are not reused from a previous run.
+        """
+        pylog.debug("Loading experiment: %s", path)
+
         if path is None:
             result = pfd.open_file(
                 "Experiment options",
@@ -372,8 +379,9 @@ class FARMSIMExtension(Extension):
             path = result[0]
 
         try:
-
-            self._teardown()
+            # Clean up any previous simulation and MuJoCo viewport resources
+            # so that old meshes/geometries are not reused.
+            self._prepare_for_reload()
 
             original_cwd = os.getcwd()
             os.chdir(os.path.dirname(path))
@@ -388,16 +396,20 @@ class FARMSIMExtension(Extension):
             exp.animats[0].name = "Model"
             os.chdir(original_cwd)
 
+            # Load new experiment
             self.sim = simulation_setup(experiment_options=exp,)
             self._experiment_path = path
             self._config_win.load_file(path)
             self.registry = build_registry(self.sim, network=self.network)
             pylog.info(f"Loaded experiment: {path}")
 
+            # Reinitialize windows (MuJoCo viewport will create fresh
+            # scene/context)
+            self.init_windows()
+
             # Restore saved plot windows, or create defaults
             if not self._restore_plot_windows():
                 self._create_default_plot_windows()
-            self.init_windows()
 
         except Exception as e:
             pylog.error(f"Failed to load experiment: {e}")
@@ -407,6 +419,7 @@ class FARMSIMExtension(Extension):
     def _reload_experiment(self):
         """Reload the current experiment from disk."""
         if hasattr(self, '_experiment_path'):
+            pylog.debug("Reloading experiment: %s", self._experiment_path)
             self.load_experiment(self._experiment_path)
 
     def _create_default_plot_windows(self):
@@ -463,11 +476,22 @@ class FARMSIMExtension(Extension):
 
     def _teardown(self):
         """Clean up the current simulation if one exists."""
-        # Save plot configs before removing windows
         if self.sim is not None:
             self._last_saved_state = self.on_save_state()
             pylog.info("Tearing down current simulation")
+
+            # Clean up MuJoCo simulation resources to prevent memory leaks
+            try:
+                if hasattr(self.sim, 'cleanup'):
+                    pylog.debug("Cleaning up MuJoCo simulation")
+                    self.sim.cleanup()
+                else:
+                    pylog.warning("Clean up missing")
+            except Exception as e:
+                pylog.warning(f"Failed to clean up MuJoCo simulation: {e}")
+
             self.sim = None
+
         # Remove dynamic windows (keep persistent windows like the viewport)
         to_remove = [
             w for w in self.windows.values()
@@ -480,12 +504,43 @@ class FARMSIMExtension(Extension):
         self._dt_remainder = 0.0
         self._view_offset = 0
 
+    def _prepare_for_reload(self):
+        """Clean up the current simulation and MuJoCo viewport resources.
+
+        Ensures the MuJoCo viewport recreates its scene, context, and OpenGL
+        resources from scratch when a new experiment is loaded, rather than
+        reusing cached meshes from the previous run.
+        """
+        pylog.debug("Preparing extension for experiment reload")
+
+        # Save state for plot window restoration
+        self._last_saved_state = self.on_save_state()
+
+        # Tear down the current simulation (removes plot windows, cleans sim)
+        self._teardown()
+
+        # Force the MuJoCo viewport to reinitialize on next render cycle.
+        # on_initialize() calls _cleanup_mujoco_resources() which deletes the
+        # old FBO/texture and sets all mjv/mjr objects to None.  When
+        # init_windows() runs after the new sim is loaded, fresh objects will
+        # be created against the new model.
+        if self._mujoco_win._initialized:
+            self._mujoco_win._cleanup_mujoco_resources()
+            self._mujoco_win._initialized = False
+
+        # Reset dock layout phases so windows redock cleanly
+        for window in self.windows.values():
+            window._reset_dock_phase = 2
+
+        pylog.debug("Extension prepared for reload")
+
     # State persistence
     def on_save_state(self) -> dict:
         """Save plot window configs so they persist across runs."""
         # If sim is torn down, windows are gone — return cached state
         plot_windows = [w for w in self.windows.values() if isinstance(w, PlotWindow)]
-        if not plot_windows and self.sim is None:
+        sim = getattr(self, 'sim', None)
+        if not plot_windows and sim is None:
             return getattr(self, '_last_saved_state', {})
 
         plot_configs = []
