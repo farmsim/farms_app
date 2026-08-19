@@ -9,6 +9,7 @@ from farms_app.console import console
 from farms_app.core.config_editor import ConfigEditorWindow
 from farms_app.core.extension import Extension
 from farms_app.core.widget import PlaybackState, SimulationToolbar
+from farms_app.extensions.farmsim.camera_follower import ViewportCameraFollower
 from farms_app.extensions.farmsim.data_registry import build_registry
 from farms_app.extensions.farmsim.windows.mujoco_viewport import \
     MuJoCoViewportWindow
@@ -87,6 +88,9 @@ class FARMSIMExtension(Extension):
         self.register_window(self._network_vis_win)
         self._new_plot_name = ""
         self._show_new_plot_popup = False
+
+        # Camera follower
+        self._camera_follower: ViewportCameraFollower | None = None
 
     def on_pre_frame(self):
         """Render MuJoCo before ImGui frame — no FBO conflicts."""
@@ -280,6 +284,32 @@ class FARMSIMExtension(Extension):
             new_iter = max(0, task.iteration + n)
             task.iteration = new_iter
 
+    # Camera following
+    def enable_camera_follow(self, animat_id: int = 0):
+        """Dynamically add a ViewportCameraFollower to task.extensions."""
+        if self.sim is None or self._camera_follower is not None:
+            return
+        if not self._mujoco_win._initialized:
+            pylog.warning("MuJoCo viewport not initialized; cannot follow")
+            return
+        follower = ViewportCameraFollower(
+            camera=self._mujoco_win.mj_camera,
+            animat_id=animat_id,
+        )
+        follower.initialize_episode(task=self.task, physics=self.sim.physics)
+        self.task.extensions.append(follower)
+        self._camera_follower = follower
+        pylog.info("Camera following animat %d", animat_id)
+
+    def disable_camera_follow(self):
+        """Remove the ViewportCameraFollower from task.extensions."""
+        if self._camera_follower is None:
+            return
+        if self._camera_follower in self.task.extensions:
+            self.task.extensions.remove(self._camera_follower)
+        self._camera_follower = None
+        pylog.info("Camera following disabled")
+
     # Menu
     def menu(self):
         if imgui.begin_menu("FARMSIM"):
@@ -296,6 +326,16 @@ class FARMSIMExtension(Extension):
                     self._new_plot_name = f"Plot {FARMSIMExtension._PLOT_WINDOW_COUNTER}"
                     self._show_new_plot_popup = True
                 imgui.end_menu()
+            imgui.separator()
+            if imgui.menu_item_simple(
+                "Follow Animat",
+                selected=self._camera_follower is not None,
+                enabled=self.sim is not None,
+            ):
+                if self._camera_follower is not None:
+                    self.disable_camera_follow()
+                else:
+                    self.enable_camera_follow()
             imgui.separator()
             if imgui.begin_menu("Windows"):
                 for window in self.windows.values():
@@ -503,6 +543,7 @@ class FARMSIMExtension(Extension):
         self.playback_state = PlaybackState.STOPPED
         self._dt_remainder = 0.0
         self._view_offset = 0
+        self._camera_follower = None
 
     def _prepare_for_reload(self):
         """Clean up the current simulation and MuJoCo viewport resources.

@@ -187,6 +187,17 @@ class MuJoCoViewportWindow(Window["FARMSIMExtension"]):
             scrub_max=scrub_max,
         )
 
+        # Camera follow toggle
+        if ext.sim is not None:
+            changed, following = imgui.checkbox(
+                "Follow Animat", ext._camera_follower is not None,
+            )
+            if changed:
+                if following:
+                    ext.enable_camera_follow()
+                else:
+                    ext.disable_camera_follow()
+
         if ext.sim is None:
             imgui.text("No simulation loaded")
             return
