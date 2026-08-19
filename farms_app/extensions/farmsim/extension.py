@@ -1,31 +1,38 @@
 """ Main FARMSIM extension """
+
 from farms_core.model.control import AnimatController
 
 import os
 import sys
 import time
 
-from farms_app.console import console
-from farms_app.core.config_editor import ConfigEditorWindow
-from farms_app.core.extension import Extension
-from farms_app.core.widget import PlaybackState, SimulationToolbar
-from farms_app.extensions.farmsim.camera_follower import ViewportCameraFollower
-from farms_app.extensions.farmsim.data_registry import build_registry
-from farms_app.extensions.farmsim.windows.mujoco_viewport import \
-    MuJoCoViewportWindow
-from farms_app.extensions.farmsim.windows.network_visualizer import \
-    NetworkVisualizerWindow
-from farms_app.extensions.farmsim.windows.properties import PropertiesWindow
-from farms_app.plots.data_registry import DataRegistry
-from farms_app.plots.plot_window import (PlotConfig, PlotWindow,
-                                         PlotWindowConfig, SignalStyle)
+from imgui_bundle import imgui
+from imgui_bundle import portable_file_dialogs as pfd
+
 from farms_core import pylog
 from farms_core.sensors.data import SensorsData
 from farms_core.experiment.options import ExperimentOptions
-from farms_core.simulation.options import Simulator
 from farms_sim.simulation import simulation_setup
-from imgui_bundle import imgui
-from imgui_bundle import portable_file_dialogs as pfd
+
+from ...console import console
+from ...core.config_editor import ConfigEditorWindow
+from ...core.extension import Extension
+from ...core.widget import PlaybackState, SimulationToolbar
+from ...plots.data_registry import DataRegistry
+from ...plots.plot_window import (
+    PlotConfig,
+    PlotWindow,
+    PlotWindowConfig,
+    SignalStyle,
+)
+from .data_registry import build_registry
+from .windows.mujoco_viewport import MuJoCoViewportWindow
+from .windows.network_visualizer import NetworkVisualizerWindow
+from .windows.properties import PropertiesWindow
+from .camera_follower import (
+    ViewportCameraFollower,
+    ViewportTrailCoMViewer,
+)
 
 
 try:
@@ -91,6 +98,9 @@ class FARMSIMExtension(Extension):
 
         # Camera follower
         self._camera_follower: ViewportCameraFollower | None = None
+
+        # CoM trail viewer
+        self._trail_viewer: ViewportTrailCoMViewer | None = None
 
     def on_pre_frame(self):
         """Render MuJoCo before ImGui frame — no FBO conflicts."""
@@ -310,6 +320,26 @@ class FARMSIMExtension(Extension):
         self._camera_follower = None
         pylog.info("Camera following disabled")
 
+    # CoM trail
+    def enable_trail(self, animat_id: int = 0):
+        """Dynamically add a ViewportTrailCoMViewer to task.extensions."""
+        if self.sim is None or self._trail_viewer is not None:
+            return
+        viewer = ViewportTrailCoMViewer(animat_id=animat_id)
+        viewer.initialize_episode(task=self.task, physics=self.sim.physics)
+        self.task.extensions.append(viewer)
+        self._trail_viewer = viewer
+        pylog.info("CoM trail enabled for animat %d", animat_id)
+
+    def disable_trail(self):
+        """Remove the ViewportTrailCoMViewer from task.extensions."""
+        if self._trail_viewer is None:
+            return
+        if self._trail_viewer in self.task.extensions:
+            self.task.extensions.remove(self._trail_viewer)
+        self._trail_viewer = None
+        pylog.info("CoM trail disabled")
+
     # Menu
     def menu(self):
         if imgui.begin_menu("FARMSIM"):
@@ -336,6 +366,15 @@ class FARMSIMExtension(Extension):
                     self.disable_camera_follow()
                 else:
                     self.enable_camera_follow()
+            if imgui.menu_item_simple(
+                "CoM Trail",
+                selected=self._trail_viewer is not None,
+                enabled=self.sim is not None,
+            ):
+                if self._trail_viewer is not None:
+                    self.disable_trail()
+                else:
+                    self.enable_trail()
             imgui.separator()
             if imgui.begin_menu("Windows"):
                 for window in self.windows.values():
@@ -544,6 +583,7 @@ class FARMSIMExtension(Extension):
         self._dt_remainder = 0.0
         self._view_offset = 0
         self._camera_follower = None
+        self._trail_viewer = None
 
     def _prepare_for_reload(self):
         """Clean up the current simulation and MuJoCo viewport resources.

@@ -1,21 +1,19 @@
-"""Viewport camera follower TaskExtension.
+"""Viewport trail viewer TaskExtensions.
 
-Dynamically adds camera-following behaviour to the MuJoCo viewport window
-in farms_app.  Unlike ``farms_mujoco.simulation.extensions.CameraFollower``
-(which targets ``task.viewer.cam`` from the standalone mujoco.viewer), this
-extension targets the ``mj_camera`` owned by ``MuJoCoViewportWindow``.
+Provides ``ViewportCameraFollower`` and ``ViewportTrailCoMViewer`` —
+farms_app equivalents of the ``CameraFollower`` and ``TrailCoMViewer``
+classes in ``farms_mujoco.simulation.extensions``, adapted to target the
+``mj_camera`` and ``mj_scene`` owned by ``MuJoCoViewportWindow`` instead of
+the standalone ``mujoco.viewer`` handle (which is ``None`` in the app).
 """
 
-from __future__ import annotations
-
-from typing import Any, TYPE_CHECKING
-
+import mujoco
 import numpy as np
+
 from farms_core.experiment.options import ExperimentOptions
 from farms_core.simulation.extensions import TaskExtension
 
-if TYPE_CHECKING:
-    from dm_control.mjcf.physics import Physics
+from dm_control.mjcf.physics import Physics
 
 
 class ViewportCameraFollower(TaskExtension):
@@ -29,7 +27,7 @@ class ViewportCameraFollower(TaskExtension):
 
     def __init__(
         self,
-        camera: Any,
+        camera,
         animat_id: int = 0,
         distance: float = 1.0,
         azimuth: float = 0.0,
@@ -37,43 +35,127 @@ class ViewportCameraFollower(TaskExtension):
         angular_velocity: float = 0.0,
     ):
         super().__init__()
-        self._camera = camera
-        self._animat_id = animat_id
-        self._distance = distance
-        self._azimuth = azimuth
-        self._elevation = elevation
-        self._angular_velocity = angular_velocity  # [deg/s]
-        self._links: Any = None
-        self._last_time = 0.0
-        self._units = None
+        self.camera = camera
+        self.animat_id = animat_id
+        self.distance = distance
+        self.azimuth = azimuth
+        self.elevation = elevation
+        self.angular_velocity = angular_velocity  # [deg/s]
+        self.links = None
+        self.last_time = 0.0
+        self.units = None
 
     @classmethod
     def from_options(cls, config: dict, experiment_options: ExperimentOptions):
         """Not used — instances are created directly by FARMSIMExtension."""
         raise NotImplementedError
 
-    def initialize_episode(self, task: Any, physics: Physics):
+    def initialize_episode(self, task, physics: Physics):
         """Bind to the animat's link sensors and set initial camera params."""
         del physics
-        self._links = task.data.animats[self._animat_id].sensors.links
-        self._units = task.units
-        self._last_time = 0.0
-        if self._camera is not None:
-            self._camera.azimuth = self._azimuth
-            self._camera.distance = self._distance * self._units.meters
-            self._camera.elevation = self._elevation
+        self.links = task.data.animats[self.animat_id].sensors.links
+        self.units = task.units
+        self.last_time = 0.0
+        if self.camera is not None:
+            self.camera.azimuth = self.azimuth
+            self.camera.distance = self.distance * self.units.meters
+            self.camera.elevation = self.elevation
 
-    def after_step(self, task: Any, physics: Physics):
+    def after_step(self, task, physics: Physics):
         """Smoothly move camera lookat toward animat CoM."""
-        if self._camera is None or self._links is None:
+        if self.camera is None or self.links is None:
             return
         now = physics.time() / task.units.seconds
-        time_diff, self._last_time = now - self._last_time, now
-        self._camera.azimuth += self._angular_velocity * time_diff
+        time_diff, self.last_time = now - self.last_time, now
+        self.camera.azimuth += self.angular_velocity * time_diff
         motion_filter = min(1.0, 10 * physics.timestep() / task.units.seconds)
         com = np.array(
-            self._links.global_com_position(iteration=task.iteration - 1)
+            self.links.global_com_position(iteration=task.iteration - 1)
         ) * task.units.meters
-        self._camera.lookat = (
-            motion_filter * com + (1.0 - motion_filter) * self._camera.lookat
+        self.camera.lookat = (
+            motion_filter * com + (1.0 - motion_filter) * self.camera.lookat
         )
+
+
+class ViewportTrailCoMViewer(TaskExtension):
+    """Draw a trail of the animat's CoM in the MuJoCo viewport scene.
+
+    Like ``TrailCoMViewer`` from ``farms_mujoco``, but instead of adding
+    geoms to ``viewer.user_scn``, the trail segments are stored and drawn
+    into the viewport's ``mj_scene`` by ``MuJoCoViewportWindow.render_mujoco``
+    after ``mjv_updateScene`` and before ``mjr_render``.
+    """
+
+    def __init__(
+        self,
+        animat_id: int = 0,
+        spacing: int = 10,
+        width: int = 5,
+        rgba: list[float] | None = None,
+    ):
+        super().__init__()
+        self.animat_id = animat_id
+        self.spacing = spacing
+        self.width = width
+        self.rgba = rgba or [1.0, 0.3, 0.0, 0.7]
+        self.links = None
+        self.units = None
+        self.segments: list[tuple[np.ndarray, np.ndarray]] = []
+        self.pos_old: np.ndarray | None = None
+        self.pos_new: np.ndarray | None = None
+
+    @classmethod
+    def from_options(cls, config: dict, experiment_options: ExperimentOptions):
+        """Not used — instances are created directly by FARMSIMExtension."""
+        raise NotImplementedError
+
+    def initialize_episode(self, task, physics: Physics):
+        """Bind to the animat's link sensors."""
+        del physics
+        self.links = task.data.animats[self.animat_id].sensors.links
+        self.units = task.units
+        self.segments = []
+        self.pos_new = self.pos_old = np.array(
+            self.links.global_com_position(0)
+        ) * self.units.meters
+
+    def after_step(self, task, physics: Physics):
+        """Record a new trail segment every ``spacing`` iterations."""
+        del physics
+        if self.links is None:
+            return
+        iteration = task.iteration - 1
+        if not iteration % self.spacing:
+            self.pos_new = np.array(
+                self.links.global_com_position(iteration)
+            ) * self.units.meters
+            if self.pos_old is not None:
+                self.segments.append((self.pos_old.copy(), self.pos_new.copy()))
+            self.pos_old = self.pos_new
+
+    def render_trail(self, scene: mujoco.MjvScene):
+        """Add trail line geoms to the scene.
+
+        Called by ``MuJoCoViewportWindow.render_mujoco`` after
+        ``mjv_updateScene`` and before ``mjr_render``.
+        """
+        for begin, end in self.segments:
+            if scene.ngeom >= scene.maxgeom:
+                break
+            geom = scene.geoms[scene.ngeom]
+            mujoco.mjv_initGeom(
+                geom=geom,
+                type=mujoco.mjtGeom.mjGEOM_LINE,
+                size=[1.0, 1.0, 1.0],
+                pos=begin,
+                mat=np.eye(3).ravel(),
+                rgba=self.rgba,
+            )
+            mujoco.mjv_connector(
+                geom=geom,
+                type=mujoco.mjtGeom.mjGEOM_LINE,
+                width=self.width,
+                from_=begin,
+                to=end,
+            )
+            scene.ngeom += 1

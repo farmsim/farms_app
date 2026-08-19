@@ -1,21 +1,22 @@
 """ MuJoCo 3D viewport window """
 
-from __future__ import annotations
-
-from typing import TYPE_CHECKING
-
 import mujoco
 import numpy as np
-from farms_app.core.widget import PlaybackState
-from farms_app.core.window import Window
-from farms_app.utils.mujoco import (
-    setup_scene, mouse_interactions, keyboard_interactions,
-)
-from farms_core import pylog
 from imgui_bundle import imgui
+from typing import TYPE_CHECKING
+
+from farms_core import pylog
+
+from ....core.widget import PlaybackState
+from ....core.window import Window
+from ....utils.mujoco import (
+    setup_scene,
+    mouse_interactions,
+    keyboard_interactions,
+)
 
 if TYPE_CHECKING:
-    from farms_app.extensions.farmsim.extension import FARMSIMExtension
+    from ..extension import FARMSIMExtension
 
 
 class MuJoCoViewportWindow(Window["FARMSIMExtension"]):
@@ -146,6 +147,12 @@ class MuJoCoViewportWindow(Window["FARMSIMExtension"]):
             self.mj_option, self.mj_perturb, self.mj_camera,
             mujoco.mjtCatBit.mjCAT_ALL, self.mj_scene,
         )
+
+        # Overlay trail geoms from active trail viewer extension
+        ext = self._extension
+        if ext._trail_viewer is not None:
+            ext._trail_viewer.render_trail(self.mj_scene)
+
         mujoco.mjr_render(self.mj_viewport, self.mj_scene, self.mj_context)
 
         # Flush stale GL errors from MuJoCo's legacy rendering (C call, bypasses PyOpenGL)
@@ -197,6 +204,15 @@ class MuJoCoViewportWindow(Window["FARMSIMExtension"]):
                     ext.enable_camera_follow()
                 else:
                     ext.disable_camera_follow()
+            imgui.same_line()
+            changed, trail = imgui.checkbox(
+                "CoM Trail", ext._trail_viewer is not None,
+            )
+            if changed:
+                if trail:
+                    ext.enable_trail()
+                else:
+                    ext.disable_trail()
 
         if ext.sim is None:
             imgui.text("No simulation loaded")
