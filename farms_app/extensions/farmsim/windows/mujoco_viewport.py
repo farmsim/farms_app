@@ -152,10 +152,9 @@ class MuJoCoViewportWindow(Window["FARMSIMExtension"]):
         ext = self._extension
         if ext.task is not None:
             for extension in ext.task.extensions:
-                if hasattr(extension, 'render_trail'):
-                    extension.render_trail(self.mj_scene)
-                elif hasattr(extension, 'render_com'):
-                    extension.render_com(self.mj_scene)
+                render_scene = getattr(extension, 'render_scene', None)
+                if render_scene is not None:
+                    render_scene(self.mj_scene)
 
         mujoco.mjr_render(self.mj_viewport, self.mj_scene, self.mj_context)
 
