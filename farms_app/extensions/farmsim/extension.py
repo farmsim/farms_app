@@ -1,7 +1,5 @@
 """ Main FARMSIM extension """
 
-from farms_core.model.control import AnimatController
-
 import os
 import sys
 import time
@@ -12,7 +10,13 @@ from imgui_bundle import portable_file_dialogs as pfd
 from farms_core import pylog
 from farms_core.sensors.data import SensorsData
 from farms_core.experiment.options import ExperimentOptions
+from farms_core.model.control import AnimatController
 from farms_sim.simulation import simulation_setup
+from farms_mujoco.simulation.extensions import (
+    CameraFollower,
+    CoMViewer,
+    TrailCoMViewer,
+)
 
 from ...console import console
 from ...core.config_editor import ConfigEditorWindow
@@ -29,11 +33,6 @@ from .data_registry import build_registry
 from .windows.mujoco_viewport import MuJoCoViewportWindow
 from .windows.network_visualizer import NetworkVisualizerWindow
 from .windows.properties import PropertiesWindow
-from .camera_follower import (
-    ViewportCameraFollower,
-    ViewportCoMViewer,
-    ViewportTrailCoMViewer,
-)
 
 
 try:
@@ -98,13 +97,13 @@ class FARMSIMExtension(Extension):
         self._show_new_plot_popup = False
 
         # Camera follower
-        self._camera_follower: ViewportCameraFollower | None = None
+        self._camera_follower: CameraFollower | None = None
 
         # CoM trail viewer
-        self._trail_viewer: ViewportTrailCoMViewer | None = None
+        self._trail_viewer: TrailCoMViewer | None = None
 
         # CoM viewer
-        self._com_viewer: ViewportCoMViewer | None = None
+        self._com_viewer: CoMViewer | None = None
 
     def on_pre_frame(self):
         """Render MuJoCo before ImGui frame — no FBO conflicts."""
@@ -300,15 +299,17 @@ class FARMSIMExtension(Extension):
 
     # Camera following
     def enable_camera_follow(self, animat_id: int = 0):
-        """Dynamically add a ViewportCameraFollower to task.extensions."""
+        """Dynamically add a CameraFollower to task.extensions."""
         if self.sim is None or self._camera_follower is not None:
             return
         if not self._mujoco_win._initialized:
             pylog.warning("MuJoCo viewport not initialized; cannot follow")
             return
-        follower = ViewportCameraFollower(
+        follower = CameraFollower(
             camera=self._mujoco_win.mj_camera,
             animat_id=animat_id,
+            viewer=None,
+            units=None,
         )
         follower.initialize_episode(task=self.task, physics=self.sim.physics)
         self.task.extensions.append(follower)
@@ -316,7 +317,7 @@ class FARMSIMExtension(Extension):
         pylog.info("Camera following animat %d", animat_id)
 
     def disable_camera_follow(self):
-        """Remove the ViewportCameraFollower from task.extensions."""
+        """Remove the CameraFollower from task.extensions."""
         if self._camera_follower is None:
             return
         if self._camera_follower in self.task.extensions:
@@ -326,17 +327,17 @@ class FARMSIMExtension(Extension):
 
     # CoM trail
     def enable_trail(self, animat_id: int = 0):
-        """Dynamically add a ViewportTrailCoMViewer to task.extensions."""
+        """Dynamically add a TrailCoMViewer to task.extensions."""
         if self.sim is None or self._trail_viewer is not None:
             return
-        viewer = ViewportTrailCoMViewer(animat_id=animat_id)
+        viewer = TrailCoMViewer(animat_id=animat_id)
         viewer.initialize_episode(task=self.task, physics=self.sim.physics)
         self.task.extensions.append(viewer)
         self._trail_viewer = viewer
         pylog.info("CoM trail enabled for animat %d", animat_id)
 
     def disable_trail(self):
-        """Remove the ViewportTrailCoMViewer from task.extensions."""
+        """Remove the TrailCoMViewer from task.extensions."""
         if self._trail_viewer is None:
             return
         if self._trail_viewer in self.task.extensions:
@@ -346,17 +347,17 @@ class FARMSIMExtension(Extension):
 
     # CoM view
     def enable_com_view(self, animat_id: int = 0):
-        """Dynamically add a ViewportCoMViewer to task.extensions."""
+        """Dynamically add a CoMViewer to task.extensions."""
         if self.sim is None or self._com_viewer is not None:
             return
-        viewer = ViewportCoMViewer(animat_id=animat_id)
+        viewer = CoMViewer(animat_id=animat_id)
         viewer.initialize_episode(task=self.task, physics=self.sim.physics)
         self.task.extensions.append(viewer)
         self._com_viewer = viewer
         pylog.info("CoM view enabled for animat %d", animat_id)
 
     def disable_com_view(self):
-        """Remove the ViewportCoMViewer from task.extensions."""
+        """Remove the CoMViewer from task.extensions."""
         if self._com_viewer is None:
             return
         if self._com_viewer in self.task.extensions:
