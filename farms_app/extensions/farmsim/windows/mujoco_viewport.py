@@ -153,6 +153,10 @@ class MuJoCoViewportWindow(Window["FARMSIMExtension"]):
         if ext._trail_viewer is not None:
             ext._trail_viewer.render_trail(self.mj_scene)
 
+        # Overlay CoM sphere from active CoM viewer extension
+        if ext._com_viewer is not None:
+            ext._com_viewer.render_com(self.mj_scene)
+
         mujoco.mjr_render(self.mj_viewport, self.mj_scene, self.mj_context)
 
         # Flush stale GL errors from MuJoCo's legacy rendering (C call, bypasses PyOpenGL)
@@ -213,6 +217,15 @@ class MuJoCoViewportWindow(Window["FARMSIMExtension"]):
                     ext.enable_trail()
                 else:
                     ext.disable_trail()
+            imgui.same_line()
+            changed, com = imgui.checkbox(
+                "CoM Viewer", ext._com_viewer is not None,
+            )
+            if changed:
+                if com:
+                    ext.enable_com_view()
+                else:
+                    ext.disable_com_view()
 
         if ext.sim is None:
             imgui.text("No simulation loaded")

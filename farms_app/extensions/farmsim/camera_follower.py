@@ -1,10 +1,11 @@
 """Viewport trail viewer TaskExtensions.
 
-Provides ``ViewportCameraFollower`` and ``ViewportTrailCoMViewer`` —
-farms_app equivalents of the ``CameraFollower`` and ``TrailCoMViewer``
-classes in ``farms_mujoco.simulation.extensions``, adapted to target the
-``mj_camera`` and ``mj_scene`` owned by ``MuJoCoViewportWindow`` instead of
-the standalone ``mujoco.viewer`` handle (which is ``None`` in the app).
+Provides ``ViewportCameraFollower``, ``ViewportTrailCoMViewer``, and
+``ViewportCoMViewer`` — farms_app equivalents of the ``CameraFollower``,
+``TrailCoMViewer``, and ``CoMViewer`` classes in
+``farms_mujoco.simulation.extensions``, adapted to target the ``mj_camera``
+and ``mj_scene`` owned by ``MuJoCoViewportWindow`` instead of the standalone
+``mujoco.viewer`` handle (which is ``None`` in the app).
 """
 
 import mujoco
@@ -159,3 +160,73 @@ class ViewportTrailCoMViewer(TaskExtension):
                 to=end,
             )
             scene.ngeom += 1
+
+
+class ViewportCoMViewer(TaskExtension):
+    """Draw a sphere at the animat's CoM in the MuJoCo viewport scene.
+
+    Like ``CoMViewer`` from ``farms_mujoco``, but instead of adding a
+    geom to ``viewer.user_scn``, the sphere is drawn into the viewport's
+    ``mj_scene`` by ``MuJoCoViewportWindow.render_mujoco`` after
+    ``mjv_updateScene`` and before ``mjr_render``.
+    """
+
+    def __init__(
+        self,
+        animat_id: int = 0,
+        size: list[float] | None = None,
+        rgba: list[float] | None = None,
+    ):
+        super().__init__()
+        self.animat_id = animat_id
+        self.size = size or [0.01, 0.0, 0.0]
+        self.rgba = rgba or [1.0, 1.0, 1.0, 0.3]
+        self.links = None
+        self.units = None
+        self.com: np.ndarray | None = None
+
+    @classmethod
+    def from_options(cls, config: dict, experiment_options: ExperimentOptions):
+        """Not used — instances are created directly by FARMSIMExtension."""
+        raise NotImplementedError
+
+    def initialize_episode(self, task, physics: Physics):
+        """Bind to the animat's link sensors and compute sphere radius."""
+        del physics
+        self.links = task.data.animats[self.animat_id].sensors.links
+        self.units = task.units
+        mass = np.sum(self.links.masses)
+        if mass is not None:
+            radius = 0.2 * ((3 * mass / 1000) / np.pi) ** (1 / 3)
+            self.size = [radius, 0.0, 0.0]
+        self.com = np.array(
+            self.links.global_com_position(0)
+        ) * self.units.meters
+
+    def after_step(self, task, physics: Physics):
+        """Update the stored CoM position."""
+        del physics
+        if self.links is None:
+            return
+        self.com = np.array(
+            self.links.global_com_position(task.iteration - 1)
+        ) * self.units.meters
+
+    def render_com(self, scene: mujoco.MjvScene):
+        """Add a CoM sphere geom to the scene.
+
+        Called by ``MuJoCoViewportWindow.render_mujoco`` after
+        ``mjv_updateScene`` and before ``mjr_render``.
+        """
+        if self.com is None or scene.ngeom >= scene.maxgeom:
+            return
+        geom = scene.geoms[scene.ngeom]
+        mujoco.mjv_initGeom(
+            geom=geom,
+            type=mujoco.mjtGeom.mjGEOM_SPHERE,
+            size=self.size,
+            pos=self.com,
+            mat=np.eye(3).ravel(),
+            rgba=self.rgba,
+        )
+        scene.ngeom += 1

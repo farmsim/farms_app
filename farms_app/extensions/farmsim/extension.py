@@ -31,6 +31,7 @@ from .windows.network_visualizer import NetworkVisualizerWindow
 from .windows.properties import PropertiesWindow
 from .camera_follower import (
     ViewportCameraFollower,
+    ViewportCoMViewer,
     ViewportTrailCoMViewer,
 )
 
@@ -101,6 +102,9 @@ class FARMSIMExtension(Extension):
 
         # CoM trail viewer
         self._trail_viewer: ViewportTrailCoMViewer | None = None
+
+        # CoM viewer
+        self._com_viewer: ViewportCoMViewer | None = None
 
     def on_pre_frame(self):
         """Render MuJoCo before ImGui frame — no FBO conflicts."""
@@ -340,6 +344,26 @@ class FARMSIMExtension(Extension):
         self._trail_viewer = None
         pylog.info("CoM trail disabled")
 
+    # CoM view
+    def enable_com_view(self, animat_id: int = 0):
+        """Dynamically add a ViewportCoMViewer to task.extensions."""
+        if self.sim is None or self._com_viewer is not None:
+            return
+        viewer = ViewportCoMViewer(animat_id=animat_id)
+        viewer.initialize_episode(task=self.task, physics=self.sim.physics)
+        self.task.extensions.append(viewer)
+        self._com_viewer = viewer
+        pylog.info("CoM view enabled for animat %d", animat_id)
+
+    def disable_com_view(self):
+        """Remove the ViewportCoMViewer from task.extensions."""
+        if self._com_viewer is None:
+            return
+        if self._com_viewer in self.task.extensions:
+            self.task.extensions.remove(self._com_viewer)
+        self._com_viewer = None
+        pylog.info("CoM view disabled")
+
     # Menu
     def menu(self):
         if imgui.begin_menu("FARMSIM"):
@@ -375,6 +399,15 @@ class FARMSIMExtension(Extension):
                     self.disable_trail()
                 else:
                     self.enable_trail()
+            if imgui.menu_item_simple(
+                "CoM Viewer",
+                selected=self._com_viewer is not None,
+                enabled=self.sim is not None,
+            ):
+                if self._com_viewer is not None:
+                    self.disable_com_view()
+                else:
+                    self.enable_com_view()
             imgui.separator()
             if imgui.begin_menu("Windows"):
                 for window in self.windows.values():
@@ -584,6 +617,7 @@ class FARMSIMExtension(Extension):
         self._view_offset = 0
         self._camera_follower = None
         self._trail_viewer = None
+        self._com_viewer = None
 
     def _prepare_for_reload(self):
         """Clean up the current simulation and MuJoCo viewport resources.
