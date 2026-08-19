@@ -299,12 +299,25 @@ class FARMSIMExtension(Extension):
 
     # Camera following
     def enable_camera_follow(self, animat_id: int = 0):
-        """Dynamically add a CameraFollower to task.extensions."""
+        """Enable camera following.
+
+        Reuses an existing config-loaded CameraFollower if one exists in
+        ``task.extensions``; otherwise creates a new one.
+        """
         if self.sim is None or self._camera_follower is not None:
             return
         if not self._mujoco_win._initialized:
             pylog.warning("MuJoCo viewport not initialized; cannot follow")
             return
+        # Reuse config-loaded CameraFollower if present
+        for ext in self.task.extensions:
+            if isinstance(ext, CameraFollower):
+                ext.camera = self._mujoco_win.mj_camera
+                ext.initialize_episode(task=self.task, physics=self.sim.physics)
+                self._camera_follower = ext
+                pylog.info("Camera following animat %d", animat_id)
+                return
+        # None found — create new
         follower = CameraFollower(
             camera=self._mujoco_win.mj_camera,
             animat_id=animat_id,
@@ -327,9 +340,21 @@ class FARMSIMExtension(Extension):
 
     # CoM trail
     def enable_trail(self, animat_id: int = 0):
-        """Dynamically add a TrailCoMViewer to task.extensions."""
+        """Enable CoM trail.
+
+        Reuses an existing config-loaded TrailCoMViewer if one exists in
+        ``task.extensions``; otherwise creates a new one.
+        """
         if self.sim is None or self._trail_viewer is not None:
             return
+        # Reuse config-loaded TrailCoMViewer if present
+        for ext in self.task.extensions:
+            if isinstance(ext, TrailCoMViewer):
+                ext.initialize_episode(task=self.task, physics=self.sim.physics)
+                self._trail_viewer = ext
+                pylog.info("CoM trail enabled for animat %d", animat_id)
+                return
+        # None found — create new
         viewer = TrailCoMViewer(animat_id=animat_id)
         viewer.initialize_episode(task=self.task, physics=self.sim.physics)
         self.task.extensions.append(viewer)
@@ -347,9 +372,21 @@ class FARMSIMExtension(Extension):
 
     # CoM view
     def enable_com_view(self, animat_id: int = 0):
-        """Dynamically add a CoMViewer to task.extensions."""
+        """Enable CoM view.
+
+        Reuses an existing config-loaded CoMViewer if one exists in
+        ``task.extensions``; otherwise creates a new one.
+        """
         if self.sim is None or self._com_viewer is not None:
             return
+        # Reuse config-loaded CoMViewer if present
+        for ext in self.task.extensions:
+            if isinstance(ext, CoMViewer):
+                ext.initialize_episode(task=self.task, physics=self.sim.physics)
+                self._com_viewer = ext
+                pylog.info("CoM view enabled for animat %d", animat_id)
+                return
+        # None found — create new
         viewer = CoMViewer(animat_id=animat_id)
         viewer.initialize_episode(task=self.task, physics=self.sim.physics)
         self.task.extensions.append(viewer)
@@ -364,6 +401,28 @@ class FARMSIMExtension(Extension):
             self.task.extensions.remove(self._com_viewer)
         self._com_viewer = None
         pylog.info("CoM view disabled")
+
+    # Extension sync
+    def _sync_extensions(self):
+        """Sync toggle variables with config-loaded extensions.
+
+        After loading an experiment, config-defined extensions are already
+        in ``task.extensions``.  Point the toggle variables at them and
+        inject viewport resources (camera) so they work in the app.
+        """
+        if self.task is None:
+            return
+        for ext in self.task.extensions:
+            if isinstance(ext, CameraFollower) and self._camera_follower is None:
+                ext.camera = self._mujoco_win.mj_camera
+                self._camera_follower = ext
+                pylog.info("Config-loaded CameraFollower detected")
+            elif isinstance(ext, TrailCoMViewer) and self._trail_viewer is None:
+                self._trail_viewer = ext
+                pylog.info("Config-loaded TrailCoMViewer detected")
+            elif isinstance(ext, CoMViewer) and self._com_viewer is None:
+                self._com_viewer = ext
+                pylog.info("Config-loaded CoMViewer detected")
 
     # Menu
     def menu(self):
@@ -519,6 +578,9 @@ class FARMSIMExtension(Extension):
             # Reinitialize windows (MuJoCo viewport will create fresh
             # scene/context)
             self.init_windows()
+
+            # Sync toggle variables with config-loaded extensions
+            self._sync_extensions()
 
             # Restore saved plot windows, or create defaults
             if not self._restore_plot_windows():

@@ -148,14 +148,14 @@ class MuJoCoViewportWindow(Window["FARMSIMExtension"]):
             mujoco.mjtCatBit.mjCAT_ALL, self.mj_scene,
         )
 
-        # Overlay trail geoms from active trail viewer extension
+        # Overlay extension geoms (trails, CoM spheres, etc.)
         ext = self._extension
-        if ext._trail_viewer is not None:
-            ext._trail_viewer.render_trail(self.mj_scene)
-
-        # Overlay CoM sphere from active CoM viewer extension
-        if ext._com_viewer is not None:
-            ext._com_viewer.render_com(self.mj_scene)
+        if ext.task is not None:
+            for extension in ext.task.extensions:
+                if hasattr(extension, 'render_trail'):
+                    extension.render_trail(self.mj_scene)
+                elif hasattr(extension, 'render_com'):
+                    extension.render_com(self.mj_scene)
 
         mujoco.mjr_render(self.mj_viewport, self.mj_scene, self.mj_context)
 
